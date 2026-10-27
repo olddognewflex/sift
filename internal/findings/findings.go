@@ -126,7 +126,7 @@ func readSnapshotFile(snapshotDir, path string) ([]byte, int, *contract.Evidence
 		return nil, 0, &contract.EvidenceCheck{Status: contract.CheckMissingFile, Detail: fmt.Sprintf("%q is not a repository-relative path", path)}
 	}
 	data, err := os.ReadFile(filepath.Join(snapshotDir, filepath.FromSlash(path)))
-	if err != nil {
+	if err != nil || !spelledExactly(snapshotDir, path) {
 		return nil, 0, &contract.EvidenceCheck{Status: contract.CheckMissingFile, Detail: fmt.Sprintf("%s does not exist in the audited snapshot", path)}
 	}
 	lineCount := strings.Count(string(data), "\n")
@@ -134,6 +134,22 @@ func readSnapshotFile(snapshotDir, path string) ([]byte, int, *contract.Evidence
 		lineCount++
 	}
 	return data, lineCount, nil
+}
+
+// spelledExactly reports whether every component of path exists in the
+// snapshot with exactly that spelling. A case- or normalization-insensitive
+// filesystem would otherwise resolve a path the snapshot skipped (a.txt) to
+// a different file that was written (A.txt).
+func spelledExactly(snapshotDir, path string) bool {
+	dir := snapshotDir
+	for _, name := range strings.Split(path, "/") {
+		entries, err := os.ReadDir(dir)
+		if err != nil || !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() == name }) {
+			return false
+		}
+		dir = filepath.Join(dir, name)
+	}
+	return true
 }
 
 func outsideFile(l contract.Location, lineCount int) contract.EvidenceCheck {

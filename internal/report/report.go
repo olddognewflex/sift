@@ -232,7 +232,7 @@ func (d *Data) limitations() []string {
 		}
 	}
 	if len(m.Repository.SkippedPaths) > 0 {
-		out = append(out, fmt.Sprintf("%d path(s) were not included in the snapshot (symlinks, submodules); see the manifest.", len(m.Repository.SkippedPaths)))
+		out = append(out, fmt.Sprintf("%d path(s) were not included in the snapshot (symlinks, submodules, path collisions); see the manifest.", len(m.Repository.SkippedPaths)))
 	}
 	if m.Integrity != nil && !m.Integrity.RepositoryUnchanged {
 		out = append(out, "Repository integrity: "+m.Integrity.Detail)

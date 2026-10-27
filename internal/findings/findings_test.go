@@ -218,3 +218,26 @@ func TestMerge(t *testing.T) {
 		t.Error("merging a non-candidate must fail")
 	}
 }
+
+// A path is only in the snapshot if spelled exactly as written: on a
+// case-insensitive filesystem a skipped a.txt or foo/b.go would otherwise
+// resolve to A.txt or Foo/b.go.
+func TestCheckLocationRequiresExactSpelling(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "Foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"A.txt", "Foo/b.go"} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(p)), []byte("x\n"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, want := range map[string]contract.CheckStatus{
+		"A.txt": contract.CheckVerified, "Foo/b.go": contract.CheckVerified,
+		"a.txt": contract.CheckMissingFile, "foo/b.go": contract.CheckMissingFile, "Foo/B.go": contract.CheckMissingFile,
+	} {
+		if got := CheckLocation(dir, contract.Location{Path: path, StartLine: 1, EndLine: 1}); got.Status != want {
+			t.Errorf("%s: %s (%s), want %s", path, got.Status, got.Detail, want)
+		}
+	}
+}

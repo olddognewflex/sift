@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,7 +130,7 @@ func Export(ctx context.Context, st State, policy contract.DirtyPolicy, dest str
 	if err := os.Mkdir(dest, 0o755); err != nil {
 		return Snapshot{}, fmt.Errorf("create snapshot directory: %w", err)
 	}
-	w := &writer{dest: dest, sums: map[string]string{}}
+	w := &writer{dest: dest, sums: map[string]string{}, dirs: map[string]bool{}}
 	var err error
 	if st.Dirty() && policy == contract.DirtyInclude {
 		err = w.exportWorkingTree(ctx, st.Root)
@@ -166,7 +167,18 @@ func Revision(st State, policy contract.DirtyPolicy, snap Snapshot) string {
 type writer struct {
 	dest    string
 	sums    map[string]string
+	dirs    map[string]bool // directories created, by exact spelling
 	skipped []string
+}
+
+const collision = "collides with an earlier path in the snapshot, e.g. on a case-insensitive filesystem"
+
+func exists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (w *writer) skip(path, why string) { w.skipped = append(w.skipped, path+" ("+why+")") }
@@ -176,9 +188,40 @@ func (w *writer) write(rel string, data []byte) error {
 		w.skip(rel, "unsafe path")
 		return nil
 	}
+	// Git lists each path once, so anything already on disk at this path or
+	// at one of its parent directories, other than a directory this writer
+	// created under exactly that spelling, means the filesystem folded two
+	// distinct paths together (README.md and readme.md, or Sub/ and sub/, on
+	// case-insensitive APFS). Keep the first path: writing the later one
+	// would fail on the read-only file, replace its content, or store it
+	// under the other path's spelling.
+	parents := strings.Split(rel, "/")
+	parents = parents[:len(parents)-1]
+	for i := range parents {
+		dir := strings.Join(parents[:i+1], "/")
+		if w.dirs[dir] {
+			continue
+		}
+		if taken, err := exists(filepath.Join(w.dest, filepath.FromSlash(dir))); err != nil {
+			return err
+		} else if taken {
+			w.skip(rel, collision)
+			return nil
+		}
+		break // the rest of the chain does not exist yet either
+	}
 	full := filepath.Join(w.dest, filepath.FromSlash(rel))
+	if taken, err := exists(full); err != nil {
+		return err
+	} else if taken {
+		w.skip(rel, collision)
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
+	}
+	for i := range parents {
+		w.dirs[strings.Join(parents[:i+1], "/")] = true
 	}
 	if err := os.WriteFile(full, data, 0o444); err != nil {
 		return fmt.Errorf("snapshot %s: %w", rel, err)
