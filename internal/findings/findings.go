@@ -1,5 +1,5 @@
 // Package findings assigns finding identity, mechanically checks evidence
-// against the audited snapshot, and decides final validation states.
+// and locations against the audited snapshot, and decides final validation states.
 //
 // The gate in this package is deterministic and has the last word: a
 // validator's acceptance cannot confirm a finding whose evidence fails
@@ -22,7 +22,7 @@ var prefixes = map[contract.Category]string{
 }
 
 // Assign turns reviewer drafts into candidate findings with stable IDs
-// (ARCH-001, ...) and evidence checks against snapshotDir.
+// (ARCH-001, ...) and evidence and location checks against snapshotDir.
 func Assign(drafts []contract.FindingDraft, cat contract.Category, reportedBy, revision, snapshotDir string) []contract.Finding {
 	out := make([]contract.Finding, 0, len(drafts))
 	for i, d := range drafts {
@@ -33,6 +33,7 @@ func Assign(drafts []contract.FindingDraft, cat contract.Category, reportedBy, r
 			ReportedBy:     reportedBy,
 			FindingDraft:   d,
 			EvidenceChecks: CheckAll(snapshotDir, d.Evidence),
+			LocationChecks: CheckLocations(snapshotDir, d.Locations),
 			State:          contract.StateCandidate,
 		})
 	}
@@ -59,22 +60,15 @@ func Check(snapshotDir string, e contract.Evidence) contract.EvidenceCheck {
 		return contract.EvidenceCheck{Status: contract.CheckNotVerifiable,
 			Detail: "execution evidence cannot be checked: the audit policy does not permit agents to run commands, so the result was not observed during this run"}
 	}
-	if !contract.ValidRelPath(e.Path) {
-		return contract.EvidenceCheck{Status: contract.CheckMissingFile, Detail: fmt.Sprintf("%q is not a repository-relative path", e.Path)}
+	data, lineCount, failed := readSnapshotFile(snapshotDir, e.Path)
+	if failed != nil {
+		return *failed
 	}
-	data, err := os.ReadFile(filepath.Join(snapshotDir, filepath.FromSlash(e.Path)))
-	if err != nil {
-		return contract.EvidenceCheck{Status: contract.CheckMissingFile, Detail: fmt.Sprintf("%s does not exist in the audited snapshot", e.Path)}
+	// The end line may run past the file: the excerpt match decides.
+	if e.StartLine < 1 || e.EndLine < e.StartLine || e.StartLine > lineCount {
+		return outsideFile(contract.Location{Path: e.Path, StartLine: e.StartLine, EndLine: e.EndLine}, lineCount)
 	}
 	file := normalize(string(data))
-	lineCount := strings.Count(string(data), "\n")
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		lineCount++
-	}
-	if e.StartLine < 1 || e.EndLine < e.StartLine || e.StartLine > lineCount {
-		return contract.EvidenceCheck{Status: contract.CheckInvalidRange,
-			Detail: fmt.Sprintf("lines %d-%d are outside %s (%d lines)", e.StartLine, e.EndLine, e.Path, lineCount)}
-	}
 	excerpt := normalize(e.Excerpt)
 	if len(excerpt) == 0 {
 		return contract.EvidenceCheck{Status: contract.CheckMismatch, Detail: "excerpt is empty"}
@@ -99,6 +93,52 @@ func Check(snapshotDir string, e contract.Evidence) contract.EvidenceCheck {
 	}
 	return contract.EvidenceCheck{Status: contract.CheckMismatch,
 		Detail: fmt.Sprintf("excerpt does not appear at %s:%d-%d", e.Path, e.StartLine, e.EndLine)}
+}
+
+// CheckLocations checks each finding location.
+func CheckLocations(snapshotDir string, locs []contract.Location) []contract.EvidenceCheck {
+	checks := make([]contract.EvidenceCheck, len(locs))
+	for i, l := range locs {
+		checks[i] = CheckLocation(snapshotDir, l)
+		checks[i].Index = i
+	}
+	return checks
+}
+
+// CheckLocation verifies that a finding location names a file in the
+// snapshot and that the whole line range lies within it.
+func CheckLocation(snapshotDir string, l contract.Location) contract.EvidenceCheck {
+	_, lineCount, failed := readSnapshotFile(snapshotDir, l.Path)
+	if failed != nil {
+		return *failed
+	}
+	if l.StartLine < 1 || l.EndLine < l.StartLine || l.EndLine > lineCount {
+		return outsideFile(l, lineCount)
+	}
+	return contract.EvidenceCheck{Status: contract.CheckVerified,
+		Detail: fmt.Sprintf("%s:%d-%d exists in the audited snapshot", l.Path, l.StartLine, l.EndLine)}
+}
+
+// readSnapshotFile reads a repository-relative file from the snapshot and
+// counts its lines. On failure it returns the check result to report.
+func readSnapshotFile(snapshotDir, path string) ([]byte, int, *contract.EvidenceCheck) {
+	if !contract.ValidRelPath(path) {
+		return nil, 0, &contract.EvidenceCheck{Status: contract.CheckMissingFile, Detail: fmt.Sprintf("%q is not a repository-relative path", path)}
+	}
+	data, err := os.ReadFile(filepath.Join(snapshotDir, filepath.FromSlash(path)))
+	if err != nil {
+		return nil, 0, &contract.EvidenceCheck{Status: contract.CheckMissingFile, Detail: fmt.Sprintf("%s does not exist in the audited snapshot", path)}
+	}
+	lineCount := strings.Count(string(data), "\n")
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		lineCount++
+	}
+	return data, lineCount, nil
+}
+
+func outsideFile(l contract.Location, lineCount int) contract.EvidenceCheck {
+	return contract.EvidenceCheck{Status: contract.CheckInvalidRange,
+		Detail: fmt.Sprintf("lines %d-%d are outside %s (%d lines)", l.StartLine, l.EndLine, l.Path, lineCount)}
 }
 
 type line struct {
@@ -177,12 +217,13 @@ func Transition(from, to contract.ValidationState) error {
 }
 
 // Gate combines the validator's decision with Sift's mechanical evidence
-// checks into a final state. decision is nil when validation failed.
-func Gate(checks []contract.EvidenceCheck, decision *contract.ValidationDecision, extra []contract.EvidenceCheck) (contract.ValidationState, string) {
+// and location checks into a final state. decision is nil when validation
+// failed.
+func Gate(checks, locations []contract.EvidenceCheck, decision *contract.ValidationDecision, extra []contract.EvidenceCheck) (contract.ValidationState, string) {
 	if decision == nil {
 		return contract.StateUnvalidated, "validation did not complete; the finding has not been independently checked"
 	}
-	var supported, contradicted, extraContradicted int
+	var supported, contradicted, extraContradicted, badLocations int
 	for _, c := range checks {
 		switch {
 		case c.Status.Supports():
@@ -194,6 +235,11 @@ func Gate(checks []contract.EvidenceCheck, decision *contract.ValidationDecision
 	for _, c := range extra {
 		if c.Status.Contradicts() {
 			extraContradicted++
+		}
+	}
+	for _, c := range locations {
+		if c.Status.Contradicts() {
+			badLocations++
 		}
 	}
 	switch decision.Verdict {
@@ -210,6 +256,8 @@ func Gate(checks []contract.EvidenceCheck, decision *contract.ValidationDecision
 		return contract.StateNeedsInvestigation, "validator accepted, but no cited evidence could be verified against the audited revision"
 	case extraContradicted > 0:
 		return contract.StateNeedsInvestigation, fmt.Sprintf("validator accepted citing %d evidence item(s) that do not match the audited revision", extraContradicted)
+	case badLocations > 0:
+		return contract.StateNeedsInvestigation, fmt.Sprintf("validator accepted, but %d finding location(s) do not exist in the audited revision", badLocations)
 	case decision.Classification == contract.ClassDefect:
 		return contract.StateConfirmed, fmt.Sprintf("accepted as a defect by validator; %d/%d evidence item(s) verified", supported, len(checks))
 	default:
@@ -229,6 +277,7 @@ func Merge(candidates []contract.Finding, decisions []contract.DecisionRecord) (
 	for i, c := range candidates {
 		f := c
 		f.EvidenceChecks = slices.Clone(c.EvidenceChecks)
+		f.LocationChecks = slices.Clone(c.LocationChecks)
 		to, reason := contract.StateUnvalidated, "no validation decision was recorded (validation did not run or was interrupted)"
 		if d, ok := byID[c.ID]; ok {
 			to, reason = d.FinalState, d.GateReason

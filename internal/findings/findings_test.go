@@ -73,7 +73,9 @@ func TestCheck(t *testing.T) {
 
 func TestAssign(t *testing.T) {
 	dir := snapshot(t)
-	d := contract.FindingDraft{Title: "t", Evidence: []contract.Evidence{src("stats.go", 5, 5, "m := xs[0]"), src("x.go", 1, 1, "y")}}
+	d := contract.FindingDraft{Title: "t",
+		Locations: []contract.Location{{Path: "stats.go", StartLine: 4, EndLine: 12}, {Path: "x.go", StartLine: 1, EndLine: 1}},
+		Evidence:  []contract.Evidence{src("stats.go", 5, 5, "m := xs[0]"), src("x.go", 1, 1, "y")}}
 	got := Assign([]contract.FindingDraft{d, d}, contract.CategoryCorrectness, "correctness", "rev", dir)
 	if got[0].ID != "CORR-001" || got[1].ID != "CORR-002" {
 		t.Fatalf("ids = %s, %s", got[0].ID, got[1].ID)
@@ -85,6 +87,40 @@ func TestAssign(t *testing.T) {
 	if len(f.EvidenceChecks) != 2 || f.EvidenceChecks[0].Status != contract.CheckVerified ||
 		f.EvidenceChecks[1].Status != contract.CheckMissingFile || f.EvidenceChecks[1].Index != 1 {
 		t.Fatalf("checks = %+v", f.EvidenceChecks)
+	}
+	if len(f.LocationChecks) != 2 || f.LocationChecks[0].Status != contract.CheckVerified ||
+		f.LocationChecks[1].Status != contract.CheckMissingFile || f.LocationChecks[1].Index != 1 {
+		t.Fatalf("location checks = %+v", f.LocationChecks)
+	}
+}
+
+func TestCheckLocation(t *testing.T) {
+	dir := snapshot(t)
+	if err := os.Mkdir(filepath.Join(dir, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		loc  contract.Location
+		want contract.CheckStatus
+	}{
+		{"whole file", contract.Location{Path: "stats.go", StartLine: 1, EndLine: 12}, contract.CheckVerified},
+		{"single line", contract.Location{Path: "stats.go", StartLine: 6, EndLine: 6}, contract.CheckVerified},
+		{"end past last line", contract.Location{Path: "stats.go", StartLine: 10, EndLine: 13}, contract.CheckInvalidRange},
+		{"start past last line", contract.Location{Path: "stats.go", StartLine: 40, EndLine: 41}, contract.CheckInvalidRange},
+		{"reversed range", contract.Location{Path: "stats.go", StartLine: 6, EndLine: 5}, contract.CheckInvalidRange},
+		{"zero start", contract.Location{Path: "stats.go", StartLine: 0, EndLine: 1}, contract.CheckInvalidRange},
+		{"missing file", contract.Location{Path: "nope.go", StartLine: 1, EndLine: 1}, contract.CheckMissingFile},
+		{"directory", contract.Location{Path: "pkg", StartLine: 1, EndLine: 1}, contract.CheckMissingFile},
+		{"escaping path", contract.Location{Path: "../stats.go", StartLine: 1, EndLine: 1}, contract.CheckMissingFile},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := CheckLocation(dir, c.loc)
+			if got.Status != c.want || got.Detail == "" {
+				t.Fatalf("status = %s (%s), want %s", got.Status, got.Detail, c.want)
+			}
+		})
 	}
 }
 
@@ -101,21 +137,26 @@ func TestGate(t *testing.T) {
 		dec    *contract.ValidationDecision
 		extra  []contract.EvidenceCheck
 		want   contract.ValidationState
+		locs   []contract.EvidenceCheck
 	}{
-		{"validator failed", ok, nil, nil, contract.StateUnvalidated},
-		{"accepted defect", ok, accept(contract.ClassDefect), nil, contract.StateConfirmed},
-		{"accepted risk", ok, accept(contract.ClassRisk), nil, contract.StateSupportedRisk},
-		{"rejected", ok, &contract.ValidationDecision{Verdict: contract.VerdictReject}, nil, contract.StateRejected},
-		{"investigate", ok, &contract.ValidationDecision{Verdict: contract.VerdictInvestigate}, nil, contract.StateNeedsInvestigation},
-		{"accepted despite fabricated evidence", bad, accept(contract.ClassDefect), nil, contract.StateNeedsInvestigation},
-		{"accepted with only unverifiable evidence", none, accept(contract.ClassDefect), nil, contract.StateNeedsInvestigation},
-		{"accepted citing fabricated extra evidence", ok, accept(contract.ClassDefect), []contract.EvidenceCheck{{Status: contract.CheckMissingFile}}, contract.StateNeedsInvestigation},
-		{"rejected with fabricated evidence", bad, &contract.ValidationDecision{Verdict: contract.VerdictReject}, nil, contract.StateRejected},
-		{"relocated evidence still supports", []contract.EvidenceCheck{{Status: contract.CheckRelocated}}, accept(contract.ClassDefect), nil, contract.StateConfirmed},
+		{"validator failed", ok, nil, nil, contract.StateUnvalidated, nil},
+		{"accepted defect", ok, accept(contract.ClassDefect), nil, contract.StateConfirmed, nil},
+		{"accepted risk", ok, accept(contract.ClassRisk), nil, contract.StateSupportedRisk, nil},
+		{"rejected", ok, &contract.ValidationDecision{Verdict: contract.VerdictReject}, nil, contract.StateRejected, nil},
+		{"investigate", ok, &contract.ValidationDecision{Verdict: contract.VerdictInvestigate}, nil, contract.StateNeedsInvestigation, nil},
+		{"accepted despite fabricated evidence", bad, accept(contract.ClassDefect), nil, contract.StateNeedsInvestigation, nil},
+		{"accepted with only unverifiable evidence", none, accept(contract.ClassDefect), nil, contract.StateNeedsInvestigation, nil},
+		{"accepted citing fabricated extra evidence", ok, accept(contract.ClassDefect), []contract.EvidenceCheck{{Status: contract.CheckMissingFile}}, contract.StateNeedsInvestigation, nil},
+		{"rejected with fabricated evidence", bad, &contract.ValidationDecision{Verdict: contract.VerdictReject}, nil, contract.StateRejected, nil},
+		{"relocated evidence still supports", []contract.EvidenceCheck{{Status: contract.CheckRelocated}}, accept(contract.ClassDefect), nil, contract.StateConfirmed, nil},
+		{"accepted with verified locations", ok, accept(contract.ClassDefect), nil, contract.StateConfirmed, ok},
+		{"accepted with a missing location", ok, accept(contract.ClassDefect), nil, contract.StateNeedsInvestigation, []contract.EvidenceCheck{{Status: contract.CheckVerified}, {Status: contract.CheckMissingFile}}},
+		{"accepted risk with an out-of-range location", ok, accept(contract.ClassRisk), nil, contract.StateNeedsInvestigation, []contract.EvidenceCheck{{Status: contract.CheckInvalidRange}}},
+		{"rejected with a missing location", ok, &contract.ValidationDecision{Verdict: contract.VerdictReject}, nil, contract.StateRejected, []contract.EvidenceCheck{{Status: contract.CheckMissingFile}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, reason := Gate(c.checks, c.dec, c.extra)
+			got, reason := Gate(c.checks, c.locs, c.dec, c.extra)
 			if got != c.want || reason == "" {
 				t.Fatalf("Gate = %s (%q), want %s", got, reason, c.want)
 			}
@@ -140,7 +181,7 @@ func TestTransition(t *testing.T) {
 
 func TestMerge(t *testing.T) {
 	cands := []contract.Finding{
-		{ID: "A-1", State: contract.StateCandidate, EvidenceChecks: []contract.EvidenceCheck{{Status: contract.CheckVerified}}},
+		{ID: "A-1", State: contract.StateCandidate, EvidenceChecks: []contract.EvidenceCheck{{Status: contract.CheckVerified}}, LocationChecks: []contract.EvidenceCheck{{Status: contract.CheckVerified}}},
 		{ID: "A-2", State: contract.StateCandidate},
 	}
 	got, err := Merge(cands, []contract.DecisionRecord{{FindingID: "A-1", FinalState: contract.StateRejected, GateReason: "nope"}})
@@ -159,6 +200,10 @@ func TestMerge(t *testing.T) {
 	got[0].EvidenceChecks[0].Status = contract.CheckMismatch
 	if cands[0].EvidenceChecks[0].Status != contract.CheckVerified {
 		t.Error("Merge must not alias candidate evidence checks")
+	}
+	got[0].LocationChecks[0].Status = contract.CheckMissingFile
+	if cands[0].LocationChecks[0].Status != contract.CheckVerified {
+		t.Error("Merge must not alias candidate location checks")
 	}
 	if _, err := Merge([]contract.Finding{{ID: "B", State: contract.StateConfirmed}}, nil); err == nil {
 		t.Error("merging a non-candidate must fail")

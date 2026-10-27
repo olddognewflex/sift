@@ -165,8 +165,8 @@ type Review struct {
 	Report   ReviewReport `json:"report"`
 }
 
-// EvidenceCheck is Sift's own mechanical verification of one evidence item
-// against the audited snapshot.
+// EvidenceCheck is Sift's own mechanical verification of one evidence item,
+// or one finding location, against the audited snapshot.
 type EvidenceCheck struct {
 	Index  int         `json:"index"`
 	Status CheckStatus `json:"status"`
@@ -185,6 +185,9 @@ type Finding struct {
 	ReportedBy     string   `json:"reported_by"`
 	FindingDraft
 	EvidenceChecks []EvidenceCheck `json:"evidence_checks"`
+	// One check per location: the file exists and the lines are within it.
+	// Absent in runs recorded before locations were checked.
+	LocationChecks []EvidenceCheck `json:"location_checks,omitempty"`
 	State          ValidationState `json:"validation_state"`
 	StateReason    string          `json:"validation_state_reason,omitempty"`
 }

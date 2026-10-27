@@ -20,12 +20,17 @@ confirmed findings" can't rest on an LLM's judgment alone.
    - `mismatch`, `missing_file`, `invalid_range`: the evidence contradicts
      the audited revision.
    - `not_verifiable`: execution evidence (agents can't run commands).
+
+   Sift also checks every finding location: the file must exist in the
+   snapshot and the whole line range must lie within it (`verified`), or the
+   location is `missing_file` or `invalid_range`.
 2. Pruv sees these check results and must re-read the source itself.
 3. A deterministic gate decides the final state:
    - Pruv `reject` → `rejected`. `investigate` → `needs_investigation`.
    - Pruv `accept` → `confirmed` (defect) or `supported_risk` (risk) only
-     if ≥1 evidence item is verified or relocated and none contradicts the
-     revision, including evidence Pruv added. Otherwise →
+     if ≥1 evidence item is verified or relocated, none contradicts the
+     revision (including evidence Pruv added), and every finding location
+     exists. Otherwise →
      `needs_investigation`, with the reason recorded.
    - Pruv failure → `unvalidated`.
 4. Final states are terminal within a run. Original candidates are never

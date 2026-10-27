@@ -503,6 +503,11 @@ func (d *Data) writeDetails(b *strings.Builder, items []Item, empty string) {
 		fmt.Fprintf(b, "%s · %s severity · %s confidence · %s · reported by %s\n\n", stateLabels[it.State], it.Severity, it.Confidence, it.Category, it.ReportedBy)
 		bullet(b, "Claim", it.Claim)
 		bullet(b, "Locations", locs(it.Locations))
+		for _, c := range it.LocationChecks {
+			if c.Status.Contradicts() {
+				bullet(b, "Location check failed", c.Detail)
+			}
+		}
 		bullet(b, "Triggering conditions", it.TriggeringConditions)
 		bullet(b, "Expected impact", it.ExpectedImpact)
 		bullet(b, "Recommended remediation", it.Remediation)
