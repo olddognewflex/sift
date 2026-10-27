@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -102,7 +103,8 @@ func TestFindingSetRoundTrip(t *testing.T) {
 	set := FindingSet{Header: NewHeader(KindFindings, "run"), Findings: []Finding{{
 		ID: "ARCH-001", SourceRevision: "abc", Category: CategoryArchitecture, ReportedBy: "architecture",
 		FindingDraft: validDraft(), EvidenceChecks: []EvidenceCheck{{Status: CheckVerified, Detail: "ok"}},
-		State: StateCandidate,
+		LocationChecks: []EvidenceCheck{{Status: CheckVerified, Detail: "ok"}},
+		State:          StateCandidate,
 	}}}
 	data, err := json.Marshal(set)
 	if err != nil {
@@ -130,6 +132,22 @@ func TestFindingSetRoundTrip(t *testing.T) {
 	bad.Findings[0].EvidenceChecks = nil
 	if bad.Validate() == nil {
 		t.Error("a finding needs one check per evidence item")
+	}
+	wrongLoc := set
+	wrongLoc.Findings = []Finding{set.Findings[0]}
+	wrongLoc.Findings[0].Locations = append(slices.Clone(wrongLoc.Findings[0].Locations), Location{Path: "c.go", StartLine: 1, EndLine: 1})
+	if wrongLoc.Validate() == nil {
+		t.Error("a finding with location checks needs one per location")
+	}
+
+	// Runs recorded before locations were checked must still load.
+	old := strings.Replace(string(data), `"location_checks":[{"index":0,"status":"verified","detail":"ok"}],`, "", 1)
+	if old == string(data) {
+		t.Fatalf("test setup: location_checks not found in %s", data)
+	}
+	var legacy FindingSet
+	if err := Decode([]byte(old), &legacy); err != nil {
+		t.Errorf("finding without location checks: %v", err)
 	}
 }
 

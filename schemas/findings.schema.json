@@ -128,6 +128,43 @@
           "id": {
             "type": "string"
           },
+          "location_checks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actual_end_line": {
+                  "type": "integer"
+                },
+                "actual_start_line": {
+                  "type": "integer"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "status": {
+                  "enum": [
+                    "verified",
+                    "relocated",
+                    "mismatch",
+                    "missing_file",
+                    "invalid_range",
+                    "not_verifiable"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "status",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "locations": {
             "items": {
               "additionalProperties": false,

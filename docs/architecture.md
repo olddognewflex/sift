@@ -94,10 +94,12 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   relocated (excerpt found at other lines), mismatch, missing_file,
   invalid_range. Execution evidence is `not_verifiable`, because agents
   can't run commands under the MVP policy.
+- Every finding location is checked too: the file must exist and the line
+  range must lie within it (verified, missing_file, invalid_range).
 - The gate (ADR 0003) has the final say. A validator `accept` becomes
   `confirmed` (defect) or `supported_risk` (risk) only if at least one cited
-  evidence item is verified and none is contradicted. Otherwise the finding
-  is `needs_investigation`.
+  evidence item is verified, none is contradicted, and every location
+  exists. Otherwise the finding is `needs_investigation`.
 - A finding whose validation failed is `unvalidated`, never accepted.
 - Candidates are never modified. The final state is derived from
   candidates plus decision records (`findings.Merge`), so an interrupted
@@ -166,8 +168,6 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
 - **Cost scales with findings:** one Pruv execution per finding. This is
   bounded by `max_findings_per_reviewer` and `max_budget_usd`.
 - **Open findings from Sift's own self-audit** (run 20261027T162639Z-d8005c):
-  - `locations` are validated for shape but not checked against the
-    snapshot. Only `evidence` is checked (CORR-001, low).
   - Adding a reviewer touches config, contract, findings (ID prefix), and
     the agent directory. A missing prefix yields IDs like `-001` (ARCH-001,
     low).

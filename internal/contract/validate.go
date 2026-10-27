@@ -201,6 +201,14 @@ func (f Finding) validate(p *problems, field string) {
 	for i, c := range f.EvidenceChecks {
 		checkEnum(p, fmt.Sprintf("%s.evidence_checks[%d].status", field, i), c.Status)
 	}
+	// Runs recorded before locations were checked have none; read them as
+	// unchecked.
+	if f.LocationChecks != nil && len(f.LocationChecks) != len(f.Locations) {
+		p.add(field+".location_checks", "have %d checks for %d locations", len(f.LocationChecks), len(f.Locations))
+	}
+	for i, c := range f.LocationChecks {
+		checkEnum(p, fmt.Sprintf("%s.location_checks[%d].status", field, i), c.Status)
+	}
 }
 
 func (s FindingSet) Validate() error {

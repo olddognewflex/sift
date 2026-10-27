@@ -372,11 +372,11 @@ func (a *auditor) runValidation(ctx context.Context) error {
 			dec, err := execute[contract.ValidationDecision](ctx, a, taskValidation, path.Join(taskValidation, f.ID), pruv, pruvPrompt(a.revision, f, a.discovery, a.limits(validatorAgent)), a.schemas[validatorAgent])
 			if err != nil {
 				rec.Error = err.Error()
-				rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, nil, nil)
+				rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, f.LocationChecks, nil, nil)
 			} else {
 				rec.Decision = &dec
 				rec.AdditionalChecks = findings.CheckAll(a.snapshot, dec.AdditionalEvidence)
-				rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, &dec, rec.AdditionalChecks)
+				rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, f.LocationChecks, &dec, rec.AdditionalChecks)
 			}
 			a.logf("[validation] %s → %s", f.ID, rec.FinalState)
 			mu.Lock()

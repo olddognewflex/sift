@@ -64,6 +64,8 @@ func pruvPrompt(rev string, f contract.Finding, d contract.DiscoveryReport, l li
 	}{f.ID, f.Category, f.ReportedBy, draft})
 	b.WriteString("\n## Sift mechanical evidence checks\n\nOne check per evidence item, by index.\n\n")
 	writeJSON(&b, f.EvidenceChecks)
+	b.WriteString("\n## Sift mechanical location checks\n\nOne check per finding location, by index.\n\n")
+	writeJSON(&b, f.LocationChecks)
 	b.WriteString("\n## System context (from discovery)\n\n")
 	fmt.Fprintf(&b, "%s\n\nPurpose: %s\n", d.Summary, d.Purpose)
 	return b.String()
