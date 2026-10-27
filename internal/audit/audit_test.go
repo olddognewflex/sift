@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -297,6 +298,92 @@ func TestValidatorFailureLeavesFindingUnvalidated(t *testing.T) {
 	for _, d := range decs.Decisions {
 		if d.FindingID == "CORR-001" && (d.Error == "" || d.Decision != nil) {
 			t.Errorf("failed validation record = %+v", d)
+		}
+	}
+}
+
+func TestValidationRespectsParallelism(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Audit.MaxParallelAgents = 2
+	var running, peak atomic.Int32
+	e.h.Before = func(ctx context.Context, req harness.Request) error {
+		if req.Agent != "pruv" {
+			return nil
+		}
+		n := running.Add(1)
+		defer running.Add(-1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}
+	if _, err := e.run(t, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p := peak.Load(); p != 2 {
+		t.Errorf("peak concurrent validations = %d, want 2", p)
+	}
+}
+
+func TestValidatorPanicLeavesFindingUnvalidated(t *testing.T) {
+	e := newEnv(t)
+	e.h.Responders["pruv"] = func(req harness.Request, n int) (json.RawMessage, error) {
+		if testutil.FindingID(req) == "CORR-001" {
+			panic("boom")
+		}
+		return testutil.Pruv(req, n)
+	}
+	res, err := e.run(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := res.Manifest.Task("validation")
+	if v.Status != contract.TaskFailed || !strings.Contains(v.Error, "1 of 4 findings could not be validated") || !strings.Contains(v.Error, "panicked") {
+		t.Errorf("validation = %s: %s", v.Status, v.Error)
+	}
+	got := states(t, res.Run)
+	if got["CORR-001"] != contract.StateUnvalidated || got["ARCH-001"] != contract.StateSupportedRisk || got["CORR-003"] != contract.StateRejected {
+		t.Errorf("states = %v", got)
+	}
+}
+
+func TestInterruptedValidationKeepsDecisions(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Audit.MaxParallelAgents = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.Before = func(ctx context.Context, req harness.Request) error {
+		if req.Agent == "pruv" && testutil.FindingID(req) == "CORR-002" {
+			cancel()
+			return &harness.Error{Kind: harness.ErrCanceled, Msg: "canceled", Err: ctx.Err()}
+		}
+		return nil
+	}
+	res, err := e.run(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Manifest.Status != contract.RunInterrupted {
+		t.Fatalf("status = %s", res.Manifest.Status)
+	}
+	if s := res.Manifest.Task("validation").Status; s != contract.TaskInterrupted {
+		t.Errorf("validation = %s", s)
+	}
+	// Findings are validated in order: ARCH-001, CORR-001, CORR-002, ...
+	got := states(t, res.Run)
+	want := map[string]contract.ValidationState{
+		"ARCH-001": contract.StateSupportedRisk,
+		"CORR-001": contract.StateConfirmed,
+		"CORR-002": contract.StateUnvalidated,
+		"CORR-003": contract.StateUnvalidated,
+	}
+	for id, s := range want {
+		if got[id] != s {
+			t.Errorf("%s = %s, want %s", id, got[id], s)
 		}
 	}
 }

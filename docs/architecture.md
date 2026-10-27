@@ -31,7 +31,9 @@ The task graph is fixed in code (`internal/audit`). `Needs` dependencies
 must succeed, and a task whose `Needs` didn't succeed is skipped. `After`
 dependencies only order execution. Validation runs after the reviewers
 whatever their outcome, so one failed reviewer still leaves the other's
-findings validated. The report always runs.
+findings validated. Inside validation, each finding's Pruv execution runs
+through the same scheduler, under the same `max_parallel_agents` limit;
+each decision is saved as soon as it is made. The report always runs.
 
 ## Packages
 
@@ -172,9 +174,6 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   examined and re-checked.
 - **Cost scales with findings:** one Pruv execution per finding. This is
   bounded by `max_findings_per_reviewer` and `max_budget_usd`.
-- **Open findings from Sift's own self-audit** (run 20261027T162639Z-d8005c):
-  - `runValidation` keeps its own bounded worker pool and mixes persistence
-    with merge policy (ARCH-002, low).
 - **Not implemented yet:** additional reviewers (performance, security,
   …), resuming an interrupted run, `sift verify`, and execution evidence
   (would need a sandboxed command policy).
