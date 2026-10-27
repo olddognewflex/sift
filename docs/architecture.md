@@ -138,8 +138,12 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   must catch), and a finding Pruv rejects. They cover the failure paths:
   reviewer failure, discovery failure, invalid output, Pruv failure,
   interruption, dirty tree, and misconfigured storage.
-- `make e2e` runs a live audit with Claude Code (`SIFT_E2E=1`). It is
-  skipped by default.
+- `make e2e` runs a live audit of the fixture repository (`SIFT_E2E=1`)
+  through each harness in `SIFT_E2E_HARNESS` (default `claude-code`; e.g.
+  `claude-code,kiro`). It checks the planted defect is found and confirmed,
+  every cited path is repository-relative, the run records its harness and
+  unenforced guarantees, and the repository is unchanged. It is skipped by
+  default.
 - `make conformance` runs the harness conformance suite live
   (`SIFT_CONFORMANCE=1`). Each check runs the adapter in a hostile sandbox
   (planted instruction files, hooks, and MCP configs; a secret outside the

@@ -9,7 +9,9 @@ test:
 race:
 	go test -race ./...
 
-# Live audit with the real Claude Code harness (costs money).
+# Live audit of a fixture repository through a real harness (costs money or
+# Kiro credits). Select harnesses with SIFT_E2E_HARNESS, e.g.
+# SIFT_E2E_HARNESS=claude-code,kiro make e2e (default: claude-code).
 e2e:
 	SIFT_E2E=1 go test ./internal/e2e -v -count=1 -timeout 30m
 
