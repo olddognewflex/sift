@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "type": "string"
+    },
+    "report": {
+      "additionalProperties": false,
+      "properties": {
+        "build_conventions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "type": "string"
+        },
+        "critical_paths": {
+          "description": "Important execution paths worth reviewing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dependencies": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "source": {
+                "description": "Manifest file that declares it, e.g. go.mod.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "purpose",
+              "source"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "entry_points": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "description"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "frameworks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "modules": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "responsibility": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "name",
+              "responsibility"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "purpose": {
+          "description": "Primary purpose and workflows, as evidenced by the repository.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Two to four sentences: what the system is and does.",
+          "type": "string"
+        },
+        "test_conventions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unknowns": {
+          "description": "Requirements, constraints, or areas that could not be determined.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "summary",
+        "purpose",
+        "languages",
+        "frameworks",
+        "entry_points",
+        "modules",
+        "dependencies",
+        "build_conventions",
+        "test_conventions",
+        "critical_paths",
+        "unknowns",
+        "completeness"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "source_revision": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "schema_version",
+    "run_id",
+    "source_revision",
+    "report"
+  ],
+  "title": "Sift system discovery context",
+  "type": "object"
+}

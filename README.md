@@ -209,18 +209,39 @@ Machine-readable JSON artifacts accompany Markdown reports to support integratio
 
 ## CLI
 
-The proposed command interface is:
-
 ```bash
-sift init
-sift audit .
-sift status
-sift findings
-sift verify PERF-004
-sift report
+make build                      # builds bin/sift (Go 1.27+)
+sift init                       # writes a documented sift.yaml with defaults
+sift audit .                    # runs a full audit of the Git repository
+sift audit . --dirty=include    # audits uncommitted changes too (default: refuse)
+sift status [--run ID] [--json] # shows run state, tasks, cost, warnings
+sift findings [--state confirmed] [--json]
+sift report [--regenerate]      # prints report paths, or rebuilds them from artifacts
 ```
 
-These commands represent the intended interface and are not necessarily implemented yet.
+`sift audit` exits with 0 when the audit completed, 2 when results are partial, 130 when interrupted, and 1 when it failed.
+Runs are stored in `~/.sift/runs/<run-id>/`, which is never inside the audited repository.
+Each run directory holds the manifest, the read-only source snapshot, every agent prompt and its raw output, the validated artifacts, and the reports.
+
+`sift verify` is planned but not implemented yet.
+
+## Current Status
+
+The MVP (Phase 1) is implemented:
+
+- Discovery, Architecture, and Correctness agents
+- Pruv validation
+- A mechanical evidence gate
+- Deterministic Markdown reports
+- A Claude Code harness adapter
+
+What's built and what isn't: [docs/architecture.md](docs/architecture.md).
+Key decisions: [docs/decisions/](docs/decisions/).
+Artifact JSON Schemas: [schemas/](schemas/).
+
+Requirements: Git, and Claude Code 2.1.311 or later on `PATH`, signed in.
+
+Agents run read-only against a snapshot. Claude Code enforces this, but it is not an operating-system sandbox. See [ADR 0002](docs/decisions/0002-claude-code-harness.md) for exactly what is and isn't guaranteed.
 
 ## Technology Direction
 

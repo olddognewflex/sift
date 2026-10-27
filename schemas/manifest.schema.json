@@ -1,0 +1,301 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "agents": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "sha256",
+          "source"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "config": {},
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "finished_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "harness": {
+      "additionalProperties": false,
+      "properties": {
+        "binary": {
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "binary",
+        "version",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "host": {
+      "type": "string"
+    },
+    "integrity": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "repository_unchanged": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repository_unchanged",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "policy": {
+      "additionalProperties": false,
+      "properties": {
+        "command_execution": {
+          "type": "boolean"
+        },
+        "enforcement": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "network": {
+          "type": "boolean"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unenforced": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools",
+        "command_execution",
+        "network",
+        "enforcement",
+        "unenforced"
+      ],
+      "type": "object"
+    },
+    "repository": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "diff_sha256": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "dirty_policy": {
+          "enum": [
+            "refuse",
+            "head",
+            "include"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "skipped_paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "snapshot_digest": {
+          "type": "string"
+        },
+        "snapshot_files": {
+          "type": "integer"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "status_porcelain": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "commit",
+        "dirty",
+        "dirty_policy",
+        "source_revision",
+        "snapshot_digest",
+        "snapshot_files"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "sift_version": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "partial",
+        "failed",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "tasks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ended_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "executions": {
+            "description": "Run-relative paths of execution results.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "skipped",
+              "interrupted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "schema_version",
+    "run_id",
+    "sift_version",
+    "status",
+    "created_at",
+    "updated_at",
+    "pid",
+    "host",
+    "repository",
+    "config",
+    "harness",
+    "agents",
+    "policy",
+    "tasks"
+  ],
+  "title": "Sift audit manifest",
+  "type": "object"
+}

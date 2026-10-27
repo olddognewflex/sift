@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "decisions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "additional_evidence_checks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actual_end_line": {
+                  "type": "integer"
+                },
+                "actual_start_line": {
+                  "type": "integer"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "status": {
+                  "enum": [
+                    "verified",
+                    "relocated",
+                    "mismatch",
+                    "missing_file",
+                    "invalid_range",
+                    "not_verifiable"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "status",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "decision": {
+            "additionalProperties": false,
+            "properties": {
+              "additional_evidence": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "description": "Execution evidence: the exact command run.",
+                      "type": "string"
+                    },
+                    "description": {
+                      "description": "What this evidence shows and why it supports the claim.",
+                      "type": "string"
+                    },
+                    "end_line": {
+                      "description": "Source evidence: last cited line, inclusive.",
+                      "type": "integer"
+                    },
+                    "environment": {
+                      "description": "Execution evidence: relevant environment.",
+                      "type": "string"
+                    },
+                    "excerpt": {
+                      "description": "Source evidence: the cited lines copied verbatim from the file.",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "source",
+                        "execution"
+                      ],
+                      "type": "string"
+                    },
+                    "limitations": {
+                      "description": "What this evidence does not establish.",
+                      "type": "string"
+                    },
+                    "path": {
+                      "description": "Source evidence: file path relative to the repository root.",
+                      "type": "string"
+                    },
+                    "result": {
+                      "description": "Execution evidence: observed result.",
+                      "type": "string"
+                    },
+                    "start_line": {
+                      "description": "Source evidence: first cited line, 1-based.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "description"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "adjusted_confidence": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ],
+                "type": "string"
+              },
+              "adjusted_severity": {
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low",
+                  "info"
+                ],
+                "type": "string"
+              },
+              "classification": {
+                "description": "Required when verdict is accept.",
+                "enum": [
+                  "defect",
+                  "risk"
+                ],
+                "type": "string"
+              },
+              "contradictory_evidence": {
+                "description": "What you searched for that could refute the claim, and what you found.",
+                "type": "string"
+              },
+              "evidence_assessment": {
+                "description": "Whether the cited evidence exists and says what the finding claims.",
+                "type": "string"
+              },
+              "impact_assessment": {
+                "type": "string"
+              },
+              "open_questions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "remediation_assessment": {
+                "type": "string"
+              },
+              "trigger_assessment": {
+                "description": "Whether the triggering conditions are reachable in practice.",
+                "type": "string"
+              },
+              "verdict": {
+                "enum": [
+                  "accept",
+                  "reject",
+                  "investigate"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "verdict",
+              "evidence_assessment",
+              "contradictory_evidence",
+              "trigger_assessment",
+              "impact_assessment",
+              "remediation_assessment",
+              "rationale"
+            ],
+            "type": "object"
+          },
+          "error": {
+            "type": "string"
+          },
+          "final_state": {
+            "enum": [
+              "candidate",
+              "confirmed",
+              "supported_risk",
+              "rejected",
+              "needs_investigation",
+              "unvalidated"
+            ],
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "gate_reason": {
+            "type": "string"
+          },
+          "validator": {
+            "type": "string"
+          },
+          "validator_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "finding_id",
+          "validator",
+          "validator_version",
+          "final_state",
+          "gate_reason"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "kind",
+    "schema_version",
+    "run_id",
+    "decisions"
+  ],
+  "title": "Sift validation decisions",
+  "type": "object"
+}
