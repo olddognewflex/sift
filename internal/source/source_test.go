@@ -182,3 +182,65 @@ func TestFingerprintSeesUntrackedContent(t *testing.T) {
 		t.Fatal("changing an untracked file's content must change the fingerprint")
 	}
 }
+
+// commitBlobs commits path->content through the index only, so the commit can
+// hold paths that the local filesystem cannot represent side by side.
+func commitBlobs(t *testing.T, repo string, files [][2]string) {
+	t.Helper()
+	for _, f := range files {
+		blob := filepath.Join(t.TempDir(), "blob")
+		if err := os.WriteFile(blob, []byte(f[1]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		oid := strings.TrimSpace(testutil.Git(t, repo, "hash-object", "-w", blob))
+		testutil.Git(t, repo, "update-index", "--add", "--cacheinfo", "100644,"+oid+","+f[0])
+	}
+	testutil.Git(t, repo, "commit", "-q", "-m", "colliding paths")
+	testutil.Git(t, repo, "reset", "-q", "--hard")
+}
+
+func TestExportSkipsFilesystemPathCollisions(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"main.go": "package main\n"})
+	// ls-tree sorts by byte, so the upper-case path of each pair comes first.
+	commitBlobs(t, repo, [][2]string{
+		{"A.txt", "upper\n"}, {"a.txt", "lower\n"},
+		{"Dir", "file\n"}, {"dir/x.txt", "nested\n"},
+		{"Sub/a.txt", "first\n"}, {"sub/a.txt", "second\n"}, {"sub/b.txt", "own dir spelling\n"},
+	})
+	st, err := Inspect(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "snap")
+	snap, err := Export(ctx, st, contract.DirtyHead, dest)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if read(t, filepath.Join(dest, "A.txt")) != "upper\n" || read(t, filepath.Join(dest, "Dir")) != "file\n" {
+		t.Error("first path of a collision must keep its own content")
+	}
+	upper, err := os.Stat(filepath.Join(dest, "A.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := os.Stat(filepath.Join(dest, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(dest, "Sub/a.txt")) != "first\n" {
+		t.Error("first path of a directory collision must keep its own content")
+	}
+	if os.SameFile(upper, lower) { // case-insensitive filesystem
+		want := []string{"a.txt (" + collision + ")", "dir/x.txt (" + collision + ")", "sub/a.txt (" + collision + ")"}
+		if strings.Join(snap.Skipped, "|") != strings.Join(want, "|") || snap.Files != 5 {
+			t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
+		}
+		return
+	}
+	if read(t, filepath.Join(dest, "a.txt")) != "lower\n" || read(t, filepath.Join(dest, "dir/x.txt")) != "nested\n" {
+		t.Error("case-sensitive filesystem must export every path")
+	}
+	if len(snap.Skipped) != 0 || snap.Files != 8 {
+		t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
+	}
+}

@@ -18,12 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/olddognewflex/sift/internal/contract"
 )
@@ -169,6 +171,8 @@ type writer struct {
 	skipped []string
 }
 
+const collision = "collides with an earlier path in the snapshot, e.g. on a case-insensitive filesystem"
+
 func (w *writer) skip(path, why string) { w.skipped = append(w.skipped, path+" ("+why+")") }
 
 func (w *writer) write(rel string, data []byte) error {
@@ -177,7 +181,22 @@ func (w *writer) write(rel string, data []byte) error {
 		return nil
 	}
 	full := filepath.Join(w.dest, filepath.FromSlash(rel))
+	// Git lists each path once, so an existing target (or a file where a
+	// parent directory should be) means the filesystem folded two distinct
+	// paths together, e.g. README.md and readme.md on case-insensitive
+	// APFS. Keep the first path; writing the second would fail on the
+	// read-only file or silently replace its content.
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if errors.Is(err, syscall.ENOTDIR) || errors.Is(err, fs.ErrExist) {
+			w.skip(rel, collision)
+			return nil
+		}
+		return err
+	}
+	if _, err := os.Lstat(full); err == nil {
+		w.skip(rel, collision)
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	if err := os.WriteFile(full, data, 0o444); err != nil {
