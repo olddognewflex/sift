@@ -231,8 +231,8 @@ func TestExportSkipsFilesystemPathCollisions(t *testing.T) {
 		t.Error("first path of a directory collision must keep its own content")
 	}
 	if os.SameFile(upper, lower) { // case-insensitive filesystem
-		want := []string{"a.txt (" + collision + ")", "dir/x.txt (" + collision + ")", "sub/a.txt (" + collision + ")"}
-		if strings.Join(snap.Skipped, "|") != strings.Join(want, "|") || snap.Files != 5 {
+		want := []string{"a.txt (" + collision + ")", "dir/x.txt (" + collision + ")", "sub/a.txt (" + collision + ")", "sub/b.txt (" + collision + ")"}
+		if strings.Join(snap.Skipped, "|") != strings.Join(want, "|") || snap.Files != 4 {
 			t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
 		}
 		return
