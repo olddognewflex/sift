@@ -16,18 +16,18 @@ import (
 	"github.com/olddognewflex/sift/internal/contract"
 )
 
-var prefixes = map[contract.Category]string{
-	contract.CategoryArchitecture: "ARCH",
-	contract.CategoryCorrectness:  "CORR",
-}
-
 // Assign turns reviewer drafts into candidate findings with stable IDs
 // (ARCH-001, ...) and evidence and location checks against snapshotDir.
 func Assign(drafts []contract.FindingDraft, cat contract.Category, reportedBy, revision, snapshotDir string) []contract.Finding {
+	prefix := cat.Prefix()
+	if prefix == "" {
+		// Config validation only admits registered reviewers.
+		panic(fmt.Sprintf("findings: category %q is not a registered reviewer", cat))
+	}
 	out := make([]contract.Finding, 0, len(drafts))
 	for i, d := range drafts {
 		out = append(out, contract.Finding{
-			ID:             fmt.Sprintf("%s-%03d", prefixes[cat], i+1),
+			ID:             fmt.Sprintf("%s-%03d", prefix, i+1),
 			SourceRevision: revision,
 			Category:       cat,
 			ReportedBy:     reportedBy,

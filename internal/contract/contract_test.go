@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -191,5 +192,30 @@ func TestDecisionSetRequiresOutcome(t *testing.T) {
 	s.Decisions[0].FinalState = StateCandidate
 	if s.Validate() == nil {
 		t.Error("candidate is not a final state")
+	}
+}
+
+func TestReviewerRegistry(t *testing.T) {
+	prefix := regexp.MustCompile(`^[A-Z]{2,6}$`)
+	names, prefixes := map[Category]bool{}, map[string]bool{}
+	for _, r := range Reviewers {
+		if r.Category == "" || names[r.Category] {
+			t.Errorf("reviewer %q: empty or duplicate name", r.Category)
+		}
+		if !prefix.MatchString(r.Prefix) || prefixes[r.Prefix] {
+			t.Errorf("reviewer %q: prefix %q is invalid or duplicate", r.Category, r.Prefix)
+		}
+		if r.Category.Prefix() != r.Prefix {
+			t.Errorf("%q.Prefix() = %q, want %q", r.Category, r.Category.Prefix(), r.Prefix)
+		}
+		names[r.Category], prefixes[r.Prefix] = true, true
+	}
+	for _, c := range []Category{CategoryArchitecture, CategoryCorrectness} {
+		if !names[c] {
+			t.Errorf("category %q is not registered", c)
+		}
+	}
+	if Category("performance").Prefix() != "" {
+		t.Error("an unregistered category must have no prefix")
 	}
 }

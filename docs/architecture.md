@@ -89,7 +89,12 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
 ```
 
 - Sift assigns IDs (`ARCH-001`, `CORR-001`) and the source revision.
-  Agents can't choose them.
+  Agents can't choose them. Each reviewer's ID prefix comes from the
+  reviewer registry, `contract.Reviewers`.
+- To add a reviewer: add it to `contract.Reviewers`, add
+  `agents/<name>.md`, and list it in the `sift init` config template.
+  Config validation, the category enum, and ID prefixes follow from the
+  registry, and tests fail if the agent file or template entry is missing.
 - Every source evidence item is checked against the snapshot: verified,
   relocated (excerpt found at other lines), mismatch, missing_file,
   invalid_range. Execution evidence is `not_verifiable`, because agents
@@ -168,9 +173,6 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
 - **Cost scales with findings:** one Pruv execution per finding. This is
   bounded by `max_findings_per_reviewer` and `max_budget_usd`.
 - **Open findings from Sift's own self-audit** (run 20261027T162639Z-d8005c):
-  - Adding a reviewer touches config, contract, findings (ID prefix), and
-    the agent directory. A missing prefix yields IDs like `-001` (ARCH-001,
-    low).
   - `runValidation` keeps its own bounded worker pool and mixes persistence
     with merge policy (ARCH-002, low).
 - **Not implemented yet:** additional reviewers (performance, security,

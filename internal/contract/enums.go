@@ -32,6 +32,8 @@ func (Confidence) Enum() []string { return []string{"high", "medium", "low"} }
 
 func (c Confidence) Rank() int { return rank(c.Enum(), string(c)) }
 
+// Category is a finding category. Each category is produced by one
+// specialist reviewer of the same name.
 type Category string
 
 const (
@@ -39,7 +41,41 @@ const (
 	CategoryCorrectness  Category = "correctness"
 )
 
-func (Category) Enum() []string { return []string{"architecture", "correctness"} }
+// Reviewer registers a specialist reviewer. Its category is also its config
+// name and its agent definition (agents/<category>.md); Prefix starts its
+// finding IDs (ARCH-001).
+type Reviewer struct {
+	Category Category
+	Prefix   string
+}
+
+// Reviewers lists every specialist reviewer. To add one, add it here and add
+// agents/<category>.md; tests check that the rest of Sift agrees.
+var Reviewers = []Reviewer{
+	{CategoryArchitecture, "ARCH"},
+	{CategoryCorrectness, "CORR"},
+}
+
+// ReviewerNames returns the registered reviewer names in order.
+func ReviewerNames() []string {
+	out := make([]string, len(Reviewers))
+	for i, r := range Reviewers {
+		out[i] = string(r.Category)
+	}
+	return out
+}
+
+func (Category) Enum() []string { return ReviewerNames() }
+
+// Prefix returns the finding ID prefix for c, or "" if c is not registered.
+func (c Category) Prefix() string {
+	for _, r := range Reviewers {
+		if r.Category == c {
+			return r.Prefix
+		}
+	}
+	return ""
+}
 
 type EvidenceKind string
 
