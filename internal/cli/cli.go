@@ -143,7 +143,7 @@ func initCmd(d Deps, configPath *string) *cobra.Command {
 }
 
 func auditCmd(d Deps, load loader) *cobra.Command {
-	var dirty, model string
+	var dirty, model, harnessName string
 	cmd := &cobra.Command{
 		Use:   "audit <path>",
 		Short: "Audit a Git repository",
@@ -160,6 +160,11 @@ Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
 			}
 			if dirty != "" {
 				cfg.Audit.DirtyPolicy = contract.DirtyPolicy(dirty)
+			}
+			if harnessName != "" && harnessName != cfg.Harness.Name {
+				// A configured binary and model belong to the configured
+				// harness; switching harness uses the new one's defaults.
+				cfg.Harness = config.HarnessConfig{Name: harnessName}
 			}
 			if model != "" {
 				cfg.Harness.Model = model
@@ -199,6 +204,7 @@ Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
 	}
 	cmd.Flags().StringVar(&dirty, "dirty", "", "dirty working tree policy: refuse, head, or include (overrides config)")
 	cmd.Flags().StringVar(&model, "model", "", "model passed to the harness (overrides config)")
+	cmd.Flags().StringVar(&harnessName, "harness", "", "agent harness: claude-code or kiro (overrides config; switching harness resets binary and model to its defaults)")
 	return cmd
 }
 

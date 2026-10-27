@@ -1,7 +1,19 @@
-.PHONY: build test race e2e conformance schemas lint clean
+.PHONY: build install install-integrations test race e2e conformance schemas lint clean
 
 build:
 	go build -o bin/sift ./cmd/sift
+
+# Install the sift binary into $(go env GOPATH)/bin (or GOBIN).
+install:
+	go install ./cmd/sift
+
+# Install the /sift-audit skill for Claude Code and the sift-audit agent for
+# Kiro CLI (user level). Re-run after updating Sift to refresh them.
+install-integrations:
+	mkdir -p $(HOME)/.claude/skills $(HOME)/.kiro/agents
+	rm -rf $(HOME)/.claude/skills/sift-audit
+	cp -R integrations/claude-code/skills/sift-audit $(HOME)/.claude/skills/sift-audit
+	cp integrations/kiro/agents/sift-audit.json $(HOME)/.kiro/agents/sift-audit.json
 
 test:
 	go test ./...
