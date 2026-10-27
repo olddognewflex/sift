@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "files": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "run_status": {
+      "enum": [
+        "running",
+        "completed",
+        "partial",
+        "failed",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "source_revision": {
+      "type": "string"
+    },
+    "state_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "kind",
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "run_status",
+    "partial",
+    "source_revision",
+    "files",
+    "state_counts",
+    "limitations"
+  ],
+  "title": "Sift report metadata",
+  "type": "object"
+}

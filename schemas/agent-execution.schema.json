@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "agent": {
+      "type": "string"
+    },
+    "agent_version": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer"
+    },
+    "cost_usd": {
+      "type": "number"
+    },
+    "dir": {
+      "description": "Run-relative directory holding prompt and raw output.",
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "error_kind": {
+      "type": "string"
+    },
+    "exit_code": {
+      "type": "integer"
+    },
+    "harness": {
+      "type": "string"
+    },
+    "harness_version": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "num_turns": {
+      "type": "integer"
+    },
+    "permission_denials": {
+      "type": "integer"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "succeeded": {
+      "type": "boolean"
+    },
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "schema_version",
+    "run_id",
+    "task_id",
+    "agent",
+    "agent_version",
+    "attempt",
+    "succeeded",
+    "started_at",
+    "ended_at",
+    "duration_ms",
+    "harness",
+    "harness_version",
+    "permission_denials",
+    "exit_code",
+    "dir"
+  ],
+  "title": "Sift agent execution result",
+  "type": "object"
+}

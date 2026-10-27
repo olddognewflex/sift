@@ -1,0 +1,264 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "agent": {
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "architecture",
+        "correctness"
+      ],
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "report": {
+      "additionalProperties": false,
+      "properties": {
+        "findings": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "alternatives": {
+                "description": "Other options and their trade-offs.",
+                "type": "string"
+              },
+              "claim": {
+                "description": "Precise, falsifiable statement of the problem.",
+                "type": "string"
+              },
+              "confidence": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ],
+                "type": "string"
+              },
+              "evidence": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "description": "Execution evidence: the exact command run.",
+                      "type": "string"
+                    },
+                    "description": {
+                      "description": "What this evidence shows and why it supports the claim.",
+                      "type": "string"
+                    },
+                    "end_line": {
+                      "description": "Source evidence: last cited line, inclusive.",
+                      "type": "integer"
+                    },
+                    "environment": {
+                      "description": "Execution evidence: relevant environment.",
+                      "type": "string"
+                    },
+                    "excerpt": {
+                      "description": "Source evidence: the cited lines copied verbatim from the file.",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "source",
+                        "execution"
+                      ],
+                      "type": "string"
+                    },
+                    "limitations": {
+                      "description": "What this evidence does not establish.",
+                      "type": "string"
+                    },
+                    "path": {
+                      "description": "Source evidence: file path relative to the repository root.",
+                      "type": "string"
+                    },
+                    "result": {
+                      "description": "Execution evidence: observed result.",
+                      "type": "string"
+                    },
+                    "start_line": {
+                      "description": "Source evidence: first cited line, 1-based.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "description"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "expected_impact": {
+                "type": "string"
+              },
+              "locations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end_line": {
+                      "description": "Last line, inclusive.",
+                      "type": "integer"
+                    },
+                    "path": {
+                      "description": "Path relative to the repository root, using forward slashes.",
+                      "type": "string"
+                    },
+                    "start_line": {
+                      "description": "First line, 1-based.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "start_line",
+                    "end_line"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "remediation": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low",
+                  "info"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "triggering_conditions": {
+                "description": "Concrete conditions under which the problem manifests.",
+                "type": "string"
+              },
+              "verification_criteria": {
+                "description": "How to verify that remediation worked.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "claim",
+              "locations",
+              "evidence",
+              "triggering_conditions",
+              "expected_impact",
+              "severity",
+              "confidence",
+              "remediation",
+              "verification_criteria"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reviewed_scope": {
+          "description": "Paths and concerns actually examined.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "strengths": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "locations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end_line": {
+                      "description": "Last line, inclusive.",
+                      "type": "integer"
+                    },
+                    "path": {
+                      "description": "Path relative to the repository root, using forward slashes.",
+                      "type": "string"
+                    },
+                    "start_line": {
+                      "description": "First line, 1-based.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "start_line",
+                    "end_line"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "locations"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "unreviewed_scope": {
+          "description": "Relevant areas not examined.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "findings",
+        "strengths",
+        "reviewed_scope",
+        "unreviewed_scope",
+        "limitations"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "schema_version",
+    "run_id",
+    "task_id",
+    "agent",
+    "category",
+    "report"
+  ],
+  "title": "Sift reviewer output",
+  "type": "object"
+}
