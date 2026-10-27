@@ -38,6 +38,8 @@ func TestValidate(t *testing.T) {
 		`{"name":"a","ok":true,"score":1,"items":[{"n":1.5}],"labels":{}}`:  "$.items[0].n: want integer",
 		`{"name":"a","ok":true,"score":1,"items":[],"labels":{"k":3}}`:      "$.labels.k: want string",
 		`{"name":"a","ok":true,"score":1,"items":[],"labels":{}} {}`:        "trailing data",
+		`{"name":"a","ok":true,"score":1,"items":[],"labels":{}}}`:          "trailing data",
+		`{"name":"a","ok":true,"score":1,"items":[],"labels":{}}]`:          "trailing data",
 		`{"name":null,"ok":true,"score":1,"items":[],"labels":{}}`:          "want string, got null",
 	} {
 		err := Validate(s, []byte(doc))

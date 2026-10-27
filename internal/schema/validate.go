@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"strings"
@@ -24,7 +25,7 @@ func Validate(schemaDoc, data []byte) error {
 	if err := dec.Decode(&v); err != nil {
 		return fmt.Errorf("not JSON: %w", err)
 	}
-	if dec.More() {
+	if _, err := dec.Token(); err != io.EOF {
 		return fmt.Errorf("not JSON: trailing data after the value")
 	}
 	var errs []string

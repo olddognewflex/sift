@@ -53,6 +53,13 @@ func New(binary string) *Harness {
 	if binary == "" {
 		binary = DefaultBinary
 	}
+	// A path like ./bin/x is relative to Sift's working directory, but the
+	// harness runs elsewhere; resolve it now. Bare names use PATH.
+	if strings.ContainsRune(binary, filepath.Separator) && !filepath.IsAbs(binary) {
+		if abs, err := filepath.Abs(binary); err == nil {
+			binary = abs
+		}
+	}
 	return &Harness{Binary: binary}
 }
 

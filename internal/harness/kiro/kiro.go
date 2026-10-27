@@ -65,6 +65,13 @@ func New(binary string) *Harness {
 	if binary == "" {
 		binary = DefaultBinary
 	}
+	// A path like ./bin/x is relative to Sift's working directory, but the
+	// harness runs elsewhere; resolve it now. Bare names use PATH.
+	if strings.ContainsRune(binary, filepath.Separator) && !filepath.IsAbs(binary) {
+		if abs, err := filepath.Abs(binary); err == nil {
+			binary = abs
+		}
+	}
 	return &Harness{Binary: binary}
 }
 
@@ -269,9 +276,6 @@ func (h *Harness) Run(ctx context.Context, req harness.Request) (harness.Result,
 
 	start := time.Now()
 	runErr := cmd.Run()
-	if cmd.ProcessState == nil {
-		return harness.Result{}, &harness.Error{Kind: harness.ErrUnsupported, Msg: "start kiro-cli", Err: runErr}
-	}
 	if cmd.Process != nil {
 		killGroup(cmd)
 	}
@@ -286,6 +290,8 @@ func (h *Harness) Run(ctx context.Context, req harness.Request) (harness.Result,
 		return harness.Result{}, &harness.Error{Kind: harness.ErrCanceled, Msg: "execution canceled", Meta: meta, Err: ctx.Err()}
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		return harness.Result{}, &harness.Error{Kind: harness.ErrTimeout, Msg: fmt.Sprintf("no result within %s", req.Timeout), Meta: meta}
+	case cmd.ProcessState == nil:
+		return harness.Result{}, &harness.Error{Kind: harness.ErrUnsupported, Msg: "start kiro-cli", Meta: meta, Err: runErr}
 	}
 	return parse(stdout.Bytes(), stderr.Bytes(), runErr, req.OutputSchema, meta)
 }

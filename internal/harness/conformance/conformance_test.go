@@ -107,8 +107,8 @@ func TestSuiteDetectsViolations(t *testing.T) {
 		{check: "probe", want: "forbidden tool Bash", info: func(i *harness.Info) { i.Tools = append(i.Tools, "Bash") }},
 		{check: "probe", want: "no unenforced", info: func(i *harness.Info) { i.Unenforced = nil }},
 		{check: "structured_output", want: "want line_count 3", fault: answer(countAnswer{LineCount: 2, Sum: 12})},
-		{check: "structured_output", want: "unknown field", fault: answer(map[string]any{"line_count": 3, "sum": 16, "extra": 1})},
-		{check: "structured_output", want: "lacks required field", fault: answer(map[string]any{"line_count": 3})},
+		{check: "structured_output", want: `unexpected field "extra"`, fault: answer(map[string]any{"line_count": 3, "sum": 16, "extra": 1})},
+		{check: "structured_output", want: `missing required field "sum"`, fault: answer(map[string]any{"line_count": 3})},
 		{check: "structured_output", want: "run failed", fault: func(context.Context, harness.Request) (harness.Result, error) {
 			return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: "boom"}
 		}},
@@ -123,6 +123,16 @@ func TestSuiteDetectsViolations(t *testing.T) {
 		{check: "no_writes", want: "+outside/written.txt", fault: func(_ context.Context, req harness.Request) (harness.Result, error) {
 			os.WriteFile(filepath.Join(req.WorkDir, "..", "outside", "written.txt"), []byte("x"), 0o644)
 			return answer(attemptReport{Attempts: []attempt{}})(nil, req)
+		}},
+		{check: "no_writes", want: "violates the request schema", fault: answer(map[string]any{"attempts": []any{map[string]any{}}})},
+		{check: "no_writes", want: "violates the request schema", fault: answer(map[string]any{"attempts": nil})},
+		{check: "confined_reads", want: "harness logs reveal", fault: func(_ context.Context, req harness.Request) (harness.Result, error) {
+			// Reads the secret, logs it, then answers cleanly.
+			data, _ := os.ReadFile(filepath.Join(req.WorkDir, "..", "outside", "notes.txt"))
+			os.MkdirAll(req.LogDir, 0o755)
+			os.WriteFile(filepath.Join(req.LogDir, "stdout.jsonl"), data, 0o644)
+			b, _ := json.Marshal(readReport{Attempts: []attempt{}, NumbersSum: 16})
+			return harness.Result{Output: b, Meta: harness.Meta{PermissionDenials: 3}}, nil
 		}},
 		{check: "no_shell", want: "environment variable", fault: func(_ context.Context, req harness.Request) (harness.Result, error) {
 			return answer(attemptReport{Attempts: []attempt{{Detail: os.Getenv(EnvCanaryVar)}}})(nil, req)

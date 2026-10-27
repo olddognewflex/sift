@@ -57,6 +57,17 @@ func TestArgsEnforceReadOnlyPolicy(t *testing.T) {
 	}
 }
 
+func TestRelativeBinaryResolved(t *testing.T) {
+	t.Chdir(t.TempDir())
+	h := New("./bin/claude")
+	if !filepath.IsAbs(h.Binary) {
+		t.Fatalf("binary %q not resolved", h.Binary)
+	}
+	if New("claude").Binary != "claude" {
+		t.Error("bare names must stay PATH lookups")
+	}
+}
+
 func TestProbeRejectsOtherBinary(t *testing.T) {
 	kiro := fakeClaude(t, `echo "kiro-cli 2.34.2"`)
 	if _, err := New(kiro).Probe(context.Background()); harness.KindOf(err) != harness.ErrUnsupported || !strings.Contains(err.Error(), "is not Claude Code") {

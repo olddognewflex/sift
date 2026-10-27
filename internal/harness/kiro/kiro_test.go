@@ -271,6 +271,35 @@ func TestRunTimeoutAndCancel(t *testing.T) {
 	}
 }
 
+func TestRelativeBinaryResolved(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	os.MkdirAll("bin", 0o755)
+	data, _ := os.ReadFile(fakeKiro(t, finish(`{"n":1}`)))
+	os.WriteFile(filepath.Join("bin", "kiro-cli"), data, 0o755)
+	h := New("./bin/kiro-cli")
+	if !filepath.IsAbs(h.Binary) {
+		t.Fatalf("binary %q not resolved", h.Binary)
+	}
+	if _, err := h.Probe(context.Background()); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if _, err := h.Run(context.Background(), request(t)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if New("kiro-cli").Binary != "kiro-cli" {
+		t.Error("bare names must stay PATH lookups")
+	}
+}
+
+func TestCanceledBeforeStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := New(fakeKiro(t, "sleep 30")).Run(ctx, request(t)); harness.KindOf(err) != harness.ErrCanceled {
+		t.Fatalf("got %v (kind %s), want canceled", err, harness.KindOf(err))
+	}
+}
+
 func TestRunRejectsIncompleteRequest(t *testing.T) {
 	if _, err := New("kiro-cli").Run(context.Background(), harness.Request{}); harness.KindOf(err) != harness.ErrUnsupported {
 		t.Fatalf("got %v", err)
