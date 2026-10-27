@@ -321,79 +321,40 @@ func (a *auditor) runReview(ctx context.Context, reviewer string) error {
 }
 
 func (a *auditor) runValidation(ctx context.Context) error {
-	// Reviews are read back from disk: the stage boundary is the artifact.
-	var candidates []contract.Finding
-	for _, t := range a.plan.Tasks {
-		rel := fmt.Sprintf(storage.ReviewFilePattn, t.Agent)
-		if !a.run.Exists(rel) {
-			continue // that reviewer failed; the run is already partial
-		}
-		var rv contract.Review
-		if err := a.run.ReadJSON(rel, &rv); err != nil {
-			return err
-		}
-		candidates = append(candidates, findings.Assign(rv.Report.Findings, rv.Category, rv.Agent, a.revision, a.snapshot)...)
+	candidates, err := a.collectCandidates()
+	if err != nil {
+		return err
 	}
 	cands := &contract.FindingSet{Header: contract.NewHeader(contract.KindFindings, a.run.ID), Findings: candidates}
 	if err := a.writeArtifact(taskValidation, storage.CandidatesFile, cands); err != nil {
 		return err
 	}
 
-	pruv := a.defs[validatorAgent]
-	records := make([]*contract.DecisionRecord, len(candidates))
-	var mu sync.Mutex
-	persist := func() error {
-		mu.Lock()
-		defer mu.Unlock()
-		set := &contract.DecisionSet{Header: contract.NewHeader(contract.KindDecisions, a.run.ID), Decisions: []contract.DecisionRecord{}}
-		for _, r := range records {
-			if r != nil {
-				set.Decisions = append(set.Decisions, *r)
-			}
-		}
-		return a.run.WriteJSON(storage.DecisionsFile, set)
-	}
-	if err := persist(); err != nil {
+	log, err := newDecisionLog(a.run, len(candidates))
+	if err != nil {
 		return err
 	}
-
-	sem := make(chan struct{}, a.opts.Config.Audit.MaxParallelAgents)
-	var wg sync.WaitGroup
-	var failed, persistErrs []error
+	// Each finding is validated as its own task through the same scheduler
+	// as the audit, so concurrency, cancellation, and panic handling work the
+	// same way everywhere.
+	tasks := make([]Task, len(candidates))
 	for i, f := range candidates {
-		if ctx.Err() != nil {
-			break
-		}
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer func() { <-sem; wg.Done() }()
-			rec := contract.DecisionRecord{FindingID: f.ID, Validator: pruv.Name, ValidatorVersion: pruv.Version}
-			dec, err := execute[contract.ValidationDecision](ctx, a, taskValidation, path.Join(taskValidation, f.ID), pruv, pruvPrompt(a.revision, f, a.discovery, a.limits(validatorAgent)), a.schemas[validatorAgent])
-			if err != nil {
-				rec.Error = err.Error()
-				rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, f.LocationChecks, nil, nil)
-			} else {
-				rec.Decision = &dec
-				rec.AdditionalChecks = findings.CheckAll(a.snapshot, dec.AdditionalEvidence)
-				rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, f.LocationChecks, &dec, rec.AdditionalChecks)
-			}
-			a.logf("[validation] %s → %s", f.ID, rec.FinalState)
-			mu.Lock()
-			records[i] = &rec
-			if err != nil && ctx.Err() == nil {
-				failed = append(failed, fmt.Errorf("%s: %w", f.ID, err))
-			}
-			mu.Unlock()
-			if err := persist(); err != nil {
-				mu.Lock()
-				persistErrs = append(persistErrs, err)
-				mu.Unlock()
-			}
-		}()
+		tasks[i] = Task{ID: f.ID, Run: func(ctx context.Context) error {
+			rec, err := a.validate(ctx, f)
+			log.record(i, rec)
+			return err
+		}}
 	}
-	wg.Wait()
-	if err := errors.Join(persistErrs...); err != nil {
+	var failed []error
+	collect := func(id string, status contract.TaskStatus, err error) {
+		if status == contract.TaskFailed {
+			failed = append(failed, fmt.Errorf("%s: %w", id, err))
+		}
+	}
+	if err := Schedule(ctx, tasks, a.opts.Config.Audit.MaxParallelAgents, collect); err != nil {
+		return err
+	}
+	if err := log.err(); err != nil {
 		return err
 	}
 	if ctx.Err() != nil {
@@ -416,6 +377,88 @@ func (a *auditor) runValidation(ctx context.Context) error {
 		return fmt.Errorf("%d of %d findings could not be validated: %w", len(failed), len(candidates), errors.Join(failed...))
 	}
 	return nil
+}
+
+// collectCandidates assigns identity and evidence checks to every reviewer's
+// findings. Reviews are read back from disk: the stage boundary is the
+// artifact.
+func (a *auditor) collectCandidates() ([]contract.Finding, error) {
+	var candidates []contract.Finding
+	for _, t := range a.plan.Tasks {
+		rel := fmt.Sprintf(storage.ReviewFilePattn, t.Agent)
+		if !a.run.Exists(rel) {
+			continue // that reviewer failed; the run is already partial
+		}
+		var rv contract.Review
+		if err := a.run.ReadJSON(rel, &rv); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, findings.Assign(rv.Report.Findings, rv.Category, rv.Agent, a.revision, a.snapshot)...)
+	}
+	return candidates, nil
+}
+
+// validate runs Pruv on one finding and applies the evidence gate. The
+// record is complete even when Pruv fails; the error says why.
+func (a *auditor) validate(ctx context.Context, f contract.Finding) (contract.DecisionRecord, error) {
+	pruv := a.defs[validatorAgent]
+	rec := contract.DecisionRecord{FindingID: f.ID, Validator: pruv.Name, ValidatorVersion: pruv.Version}
+	dec, err := execute[contract.ValidationDecision](ctx, a, taskValidation, path.Join(taskValidation, f.ID), pruv, pruvPrompt(a.revision, f, a.discovery, a.limits(validatorAgent)), a.schemas[validatorAgent])
+	if err != nil {
+		rec.Error = err.Error()
+		rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, f.LocationChecks, nil, nil)
+	} else {
+		rec.Decision = &dec
+		rec.AdditionalChecks = findings.CheckAll(a.snapshot, dec.AdditionalEvidence)
+		rec.FinalState, rec.GateReason = findings.Gate(f.EvidenceChecks, f.LocationChecks, &dec, rec.AdditionalChecks)
+	}
+	a.logf("[validation] %s → %s", f.ID, rec.FinalState)
+	return rec, err
+}
+
+// decisionLog persists validation decisions as they arrive, so an
+// interrupted run keeps every decision already made. It is safe for
+// concurrent use.
+type decisionLog struct {
+	run      *storage.Run
+	mu       sync.Mutex
+	records  []*contract.DecisionRecord // by candidate index; nil until decided
+	writeErr error
+}
+
+// newDecisionLog writes an empty decisions file for n candidates.
+func newDecisionLog(run *storage.Run, n int) (*decisionLog, error) {
+	l := &decisionLog{run: run, records: make([]*contract.DecisionRecord, n)}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l, l.writeLocked()
+}
+
+// record stores the decision for candidate i and rewrites the decisions
+// file. A write failure is kept and reported by err.
+func (l *decisionLog) record(i int, rec contract.DecisionRecord) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records[i] = &rec
+	if err := l.writeLocked(); err != nil && l.writeErr == nil {
+		l.writeErr = err
+	}
+}
+
+func (l *decisionLog) err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.writeErr
+}
+
+func (l *decisionLog) writeLocked() error {
+	set := &contract.DecisionSet{Header: contract.NewHeader(contract.KindDecisions, l.run.ID), Decisions: []contract.DecisionRecord{}}
+	for _, r := range l.records {
+		if r != nil {
+			set.Decisions = append(set.Decisions, *r)
+		}
+	}
+	return l.run.WriteJSON(storage.DecisionsFile, set)
 }
 
 // ---------------------------------------------------------------------------
