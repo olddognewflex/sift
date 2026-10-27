@@ -55,6 +55,25 @@ Each behavior was checked with a live call before it was relied on:
 `Probe` checks that every flag above still appears in `claude --help`, and
 fails the audit before a run is created if one is missing.
 
+`make conformance` re-checks these behaviors live with the harness
+conformance suite (`internal/harness/conformance`). It passed on
+2026-10-27 with Claude Code 2.1.311 and `haiku`.
+
+Negative controls ran the same suite through a wrapper that drops flags.
+They show the suite has teeth and that the isolation flags overlap:
+
+| Flags dropped | Result |
+|---|---|
+| `--restricted`, `--safe-mode`, `--strict-mcp-config` | Every live check failed: a planted MCP server ran, the planted `CLAUDE.md` was loaded, the user's plugins and hooks loaded, and detached plugin processes outlived the run |
+| `--restricted`, `--safe-mode` | Failed: planted `CLAUDE.md` loaded, planted hook or MCP server ran, processes left behind |
+| `--restricted` only | Passed: out-of-snapshot reads were still denied by `--permission-mode dontAsk` |
+| `--safe-mode` only, or with `--strict-mcp-config` | Passed: `--restricted` alone kept project config out |
+| `--strict-mcp-config` only | Passed |
+
+So project-config isolation holds if either `--restricted` or `--safe-mode`
+is present, and read confinement holds if either `--restricted` or
+`dontAsk` is present. Sift keeps all of them as defense in depth.
+
 ## Guarantees
 
 **Enforced by the harness:** a tool allowlist with no shell, write, or web
@@ -77,5 +96,7 @@ manifest (`policy.unenforced`) and every report.
 - Running `--bare` would cut more context but needs an `ANTHROPIC_API_KEY`
   (OAuth is not read). `--safe-mode` achieves the isolation that matters
   without it.
-- A second adapter (e.g. Codex) implements the same two methods. Nothing in
-  the orchestrator changes.
+- A second adapter (Kiro: ADR 0005) implements the same two methods.
+  Nothing in the orchestrator changes. It must pass the conformance suite
+  before Sift relies on it; a guarantee it cannot meet (such as a budget
+  limit) is listed in `Info.Unenforced` and its check is skipped.
