@@ -21,10 +21,11 @@ import (
 // directory when no --config flag is given.
 const DefaultFile = "sift.yaml"
 
-// Known reviewer and harness names. Keeping these here (rather than
+// Known reviewer and harness names. Keeping these fixed (rather than
 // discovering them) makes an invalid config fail before any run starts.
+// Reviewers come from the registry in contract.Reviewers.
 var (
-	KnownReviewers = []string{"architecture", "correctness"}
+	KnownReviewers = contract.ReviewerNames()
 	KnownHarnesses = []string{"claude-code", "kiro"}
 )
 
@@ -97,7 +98,7 @@ func Default() Config {
 		Harness: HarnessConfig{Name: "claude-code"},
 		Audit: AuditConfig{
 			DirtyPolicy:            contract.DirtyRefuse,
-			Reviewers:              []string{"architecture", "correctness"},
+			Reviewers:              contract.ReviewerNames(),
 			MaxFindingsPerReviewer: 8,
 			MaxParallelAgents:      2,
 		},

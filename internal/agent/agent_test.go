@@ -5,10 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/olddognewflex/sift/internal/contract"
 )
 
 func TestBuiltinsLoad(t *testing.T) {
-	defs, err := Load("", "discovery", "architecture", "correctness", "pruv")
+	names := append([]string{"discovery", "pruv"}, contract.ReviewerNames()...)
+	defs, err := Load("", names...)
 	if err != nil {
 		t.Fatal(err)
 	}

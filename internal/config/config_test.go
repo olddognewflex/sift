@@ -27,6 +27,13 @@ func TestTemplateMatchesDefaults(t *testing.T) {
 	}
 }
 
+func TestTemplateListsReviewers(t *testing.T) {
+	want := "# Specialist reviewers to run. Supported: " + strings.Join(KnownReviewers, ", ") + "."
+	if !strings.Contains(Template, want) {
+		t.Errorf("template must document every reviewer: %q", want)
+	}
+}
+
 func TestParseOverridesDefaults(t *testing.T) {
 	cfg, err := Parse([]byte(`
 version: 1

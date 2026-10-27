@@ -94,6 +94,15 @@ func TestAssign(t *testing.T) {
 	}
 }
 
+func TestAssignUnregisteredCategory(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("assigning findings for an unregistered category must panic, not produce IDs like -001")
+		}
+	}()
+	Assign([]contract.FindingDraft{{Title: "t"}}, contract.Category("performance"), "performance", "rev", t.TempDir())
+}
+
 func TestCheckLocation(t *testing.T) {
 	dir := snapshot(t)
 	if err := os.Mkdir(filepath.Join(dir, "pkg"), 0o755); err != nil {
