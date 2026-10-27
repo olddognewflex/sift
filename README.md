@@ -211,9 +211,11 @@ Machine-readable JSON artifacts accompany Markdown reports to support integratio
 
 ```bash
 make build                      # builds bin/sift (Go 1.27+)
+make install                    # installs sift into $(go env GOPATH)/bin
 sift init                       # writes a documented sift.yaml with defaults
 sift audit .                    # runs a full audit of the Git repository
 sift audit . --dirty=include    # audits uncommitted changes too (default: refuse)
+sift audit . --harness kiro     # runs the agents with Kiro CLI instead of Claude Code
 sift status [--run ID] [--json] # shows run state, tasks, cost, warnings
 sift findings [--state confirmed] [--json]
 sift report [--regenerate]      # prints report paths, or rebuilds them from artifacts
@@ -224,6 +226,15 @@ Runs are stored in `~/.sift/runs/<run-id>/`, which is never inside the audited r
 Each run directory holds the manifest, the read-only source snapshot, every agent prompt and its raw output, the validated artifacts, and the reports.
 
 `sift verify` is planned but not implemented yet.
+
+## Using Sift from Claude Code or Kiro CLI
+
+`make install install-integrations` installs `sift` and two user-level integrations that run an audit and summarize the validated findings:
+
+- **Claude Code:** the `/sift-audit` skill (`~/.claude/skills/sift-audit`). In any repository, run `/sift-audit`, or e.g. `/sift-audit . --harness kiro --dirty include`. It runs the audit in the background and asks how to treat uncommitted changes. Reading the results after the background audit finishes may prompt for permission; to avoid that, allow `Bash(sift:*)` and `Read(~/.sift/runs/**)` in your Claude Code permissions.
+- **Kiro CLI:** the `sift-audit` agent (`~/.kiro/agents/sift-audit.json`). Start it with `kiro-cli chat --agent sift-audit` and ask it to audit the repository. Only `sift audit|findings|status|report` and read-only `git status` are pre-approved; anything else asks first.
+
+Either integration can use either harness: the chat you start it from and the harness Sift runs its own agents with are independent. Sources are in [integrations/](integrations/); re-run `make install-integrations` after updating Sift.
 
 ## Current Status
 
