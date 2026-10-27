@@ -41,19 +41,21 @@ findings validated. The report always runs.
 | `internal/cli` | Cobra commands, exit codes, human/JSON output |
 | `internal/config` | YAML config: defaults, strict parsing, validation, `sift init` template |
 | `internal/contract` | Versioned artifact types, strict decoding, validation. The single source of truth |
-| `internal/schema` | JSON Schema generation from contract types (for harness and `schemas/`) |
+| `internal/schema` | JSON Schema generation from contract types (for harness and `schemas/`), and validation for harnesses without native schema support |
 | `internal/source` | Git inspection, snapshot export, dirty-tree policy, repository fingerprint |
 | `internal/storage` | Run directories, atomic artifact writes, run lookup |
 | `internal/agent` | Agent definition loading (embedded `agents/*.md` or override dir) |
 | `internal/harness` | Harness interface, request/result, typed errors |
-| `internal/harness/claudecode` | Claude Code adapter (the only real adapter) |
+| `internal/harness/claudecode` | Claude Code adapter (ADR 0002) |
+| `internal/harness/kiro` | Kiro CLI adapter: private home, empty workspace, schema validated by Sift (ADR 0005) |
 | `internal/harness/fake` | Deterministic harness for tests |
+| `internal/harness/conformance` | Live suite every adapter must pass: isolation, structured output, timeouts, budgets |
 | `internal/findings` | Finding IDs, mechanical evidence checks, state transitions, evidence gate |
 | `internal/audit` | Orchestrator: scheduler, task implementations, retries, run state |
 | `internal/report` | Deterministic Markdown reports from persisted artifacts |
 
 There is only one interface that real code substitutes:
-`harness.Harness` (Claude Code in production, the fake in tests).
+`harness.Harness` (Claude Code or Kiro in production, the fake in tests).
 
 ## Contracts
 
@@ -138,6 +140,13 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   interruption, dirty tree, and misconfigured storage.
 - `make e2e` runs a live audit with Claude Code (`SIFT_E2E=1`). It is
   skipped by default.
+- `make conformance` runs the harness conformance suite live
+  (`SIFT_CONFORMANCE=1`). Each check runs the adapter in a hostile sandbox
+  (planted instruction files, hooks, and MCP configs; a secret outside the
+  snapshot; a secret environment variable) and passes only on hard evidence:
+  no file changed, no secret in the output, no process left running, and the
+  right error kind. The suite's own tests inject each violation into a
+  scripted harness to prove it is caught.
 
 ## Known risks and limits
 

@@ -233,15 +233,15 @@ The MVP (Phase 1) is implemented:
 - Pruv validation
 - A mechanical evidence gate
 - Deterministic Markdown reports
-- A Claude Code harness adapter
+- Claude Code and Kiro CLI harness adapters, both checked by a live conformance suite
 
 What's built and what isn't: [docs/architecture.md](docs/architecture.md).
 Key decisions: [docs/decisions/](docs/decisions/).
 Artifact JSON Schemas: [schemas/](schemas/).
 
-Requirements: Git, and Claude Code 2.1.311 or later on `PATH`, signed in.
+Requirements: Git, and either Claude Code 2.1.311 or later or Kiro CLI 2.34.2 or later on `PATH`, signed in. Select the harness with `harness.name` (`claude-code` or `kiro`) in `sift.yaml`.
 
-Agents run read-only against a snapshot. Claude Code enforces this, but it is not an operating-system sandbox. See [ADR 0002](docs/decisions/0002-claude-code-harness.md) for exactly what is and isn't guaranteed.
+Agents run read-only against a snapshot. The harness enforces this, but it is not an operating-system sandbox. See [ADR 0002](docs/decisions/0002-claude-code-harness.md) (Claude Code) and [ADR 0005](docs/decisions/0005-kiro-harness.md) (Kiro) for exactly what is and isn't guaranteed. Kiro cannot enforce `max_budget_usd`.
 
 ## Technology Direction
 

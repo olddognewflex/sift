@@ -57,6 +57,13 @@ func TestArgsEnforceReadOnlyPolicy(t *testing.T) {
 	}
 }
 
+func TestProbeRejectsOtherBinary(t *testing.T) {
+	kiro := fakeClaude(t, `echo "kiro-cli 2.34.2"`)
+	if _, err := New(kiro).Probe(context.Background()); harness.KindOf(err) != harness.ErrUnsupported || !strings.Contains(err.Error(), "is not Claude Code") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestProbe(t *testing.T) {
 	info, err := New(fakeClaude(t, goodHelp)).Probe(context.Background())
 	if err != nil {
@@ -66,7 +73,7 @@ func TestProbe(t *testing.T) {
 		t.Fatalf("info = %+v", info)
 	}
 
-	old := fakeClaude(t, `case "$1" in --version) echo "1.0.0";; --help) echo "--print --output-format";; esac`)
+	old := fakeClaude(t, `case "$1" in --version) echo "1.0.0 (Claude Code)";; --help) echo "--print --output-format";; esac`)
 	_, err = New(old).Probe(context.Background())
 	if harness.KindOf(err) != harness.ErrUnsupported || !strings.Contains(err.Error(), "--json-schema") {
 		t.Fatalf("old harness: %v", err)

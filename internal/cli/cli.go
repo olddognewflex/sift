@@ -20,6 +20,7 @@ import (
 	"github.com/olddognewflex/sift/internal/contract"
 	"github.com/olddognewflex/sift/internal/harness"
 	"github.com/olddognewflex/sift/internal/harness/claudecode"
+	"github.com/olddognewflex/sift/internal/harness/kiro"
 	"github.com/olddognewflex/sift/internal/report"
 	"github.com/olddognewflex/sift/internal/storage"
 )
@@ -55,6 +56,8 @@ func DefaultHarness(cfg config.Config) (harness.Harness, error) {
 	switch cfg.Harness.Name {
 	case claudecode.Name:
 		return claudecode.New(cfg.Harness.Binary), nil
+	case kiro.Name:
+		return kiro.New(cfg.Harness.Binary), nil
 	}
 	return nil, fmt.Errorf("unsupported harness %q", cfg.Harness.Name)
 }

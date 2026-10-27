@@ -24,7 +24,10 @@ import (
 	"github.com/olddognewflex/sift/internal/harness"
 )
 
-const Name = "claude-code"
+const (
+	Name          = "claude-code"
+	DefaultBinary = "claude"
+)
 
 // tools are the only built-in tools exposed to agents: file reading and
 // searching. No shell, no file writes, no web access.
@@ -45,7 +48,13 @@ type Harness struct {
 	Binary string
 }
 
-func New(binary string) *Harness { return &Harness{Binary: binary} }
+// New returns a harness running binary; empty selects DefaultBinary.
+func New(binary string) *Harness {
+	if binary == "" {
+		binary = DefaultBinary
+	}
+	return &Harness{Binary: binary}
+}
 
 var versionPattern = regexp.MustCompile(`(\d+\.\d+\.\d+)`)
 
@@ -78,6 +87,9 @@ func (h *Harness) Probe(ctx context.Context) (harness.Info, error) {
 	out, err := exec.CommandContext(pctx, path, "--version").Output()
 	if err != nil {
 		return info, &harness.Error{Kind: harness.ErrUnsupported, Msg: "claude --version failed", Err: err}
+	}
+	if !strings.Contains(string(out), "Claude Code") {
+		return info, &harness.Error{Kind: harness.ErrUnsupported, Msg: fmt.Sprintf("%s is not Claude Code (--version printed %q); set harness.binary to claude or leave it empty", path, strings.TrimSpace(string(out)))}
 	}
 	info.Version = versionPattern.FindString(string(out))
 	if info.Version == "" {

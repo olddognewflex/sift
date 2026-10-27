@@ -25,7 +25,7 @@ const DefaultFile = "sift.yaml"
 // discovering them) makes an invalid config fail before any run starts.
 var (
 	KnownReviewers = []string{"architecture", "correctness"}
-	KnownHarnesses = []string{"claude-code"}
+	KnownHarnesses = []string{"claude-code", "kiro"}
 )
 
 type Config struct {
@@ -42,7 +42,9 @@ type StorageConfig struct {
 }
 
 type HarnessConfig struct {
-	Name   string `yaml:"name" json:"name"`
+	Name string `yaml:"name" json:"name"`
+	// Binary is the harness executable; empty uses the harness's own
+	// command (claude, kiro-cli).
 	Binary string `yaml:"binary" json:"binary"`
 	// Model is passed to the harness; empty means the harness default.
 	Model string `yaml:"model" json:"model"`
@@ -92,7 +94,7 @@ func Default() Config {
 	return Config{
 		Version: 1,
 		Storage: StorageConfig{RunsDir: "~/.sift/runs"},
-		Harness: HarnessConfig{Name: "claude-code", Binary: "claude"},
+		Harness: HarnessConfig{Name: "claude-code"},
 		Audit: AuditConfig{
 			DirtyPolicy:            contract.DirtyRefuse,
 			Reviewers:              []string{"architecture", "correctness"},
@@ -151,9 +153,6 @@ func (c Config) Validate() error {
 	}
 	if !slices.Contains(KnownHarnesses, c.Harness.Name) {
 		bad("harness.name: %q is not one of %v", c.Harness.Name, KnownHarnesses)
-	}
-	if strings.TrimSpace(c.Harness.Binary) == "" {
-		bad("harness.binary: required")
 	}
 	if !contract.Valid(c.Audit.DirtyPolicy) {
 		bad("audit.dirty_policy: %q is not one of %v", c.Audit.DirtyPolicy, c.Audit.DirtyPolicy.Enum())
@@ -239,11 +238,16 @@ storage:
   runs_dir: ~/.sift/runs
 
 harness:
-  # Agent execution harness. Supported: claude-code.
+  # Agent execution harness. Supported:
+  #   claude-code - Claude Code (enforces max_budget_usd)
+  #   kiro        - Kiro CLI (cannot enforce max_budget_usd; see ADR 0005)
   name: claude-code
-  # Harness executable, resolved via PATH when not absolute.
-  binary: claude
-  # Model passed to the harness. Empty uses the harness default.
+  # Harness executable, resolved via PATH when not absolute. Empty uses the
+  # harness's own command: claude or kiro-cli.
+  binary: ""
+  # Model passed to the harness, in the harness's own naming (e.g. sonnet
+  # for claude-code, claude-sonnet-5.5 for kiro). Empty uses the harness
+  # default.
   model: ""
 
 audit:
@@ -266,6 +270,7 @@ agents:
   # Wall-clock limit for one agent execution.
   timeout: 20m
   # Spending limit for one agent execution, enforced by the harness.
+  # The kiro harness cannot enforce it; there, only the timeout bounds spend.
   max_budget_usd: 3
   # Extra attempts after a process failure or invalid structured output.
   # Timeouts, cancellations, and budget exhaustion are not retried.
