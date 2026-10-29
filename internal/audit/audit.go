@@ -135,14 +135,14 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	a := &auditor{opts: opts, run: run, defs: defs, snapshot: run.Path(storage.SourceDir), schemas: schemas}
 	if err := a.initialize(ctx, st, hinfo); err != nil {
-		a.fail(err)
+		a.fail(ctx, err)
 		return &Result{Run: run, Manifest: a.manifest()}, err
 	}
 
 	tasks := a.tasks()
 	a.logf("run %s: auditing %s at %s", run.ID, st.Root, a.revision)
 	if err := Schedule(ctx, tasks, cfg.Audit.MaxParallelAgents, a.observe); err != nil {
-		a.fail(err)
+		a.fail(ctx, err)
 		return &Result{Run: run, Manifest: a.manifest()}, err
 	}
 	err = a.finalize(ctx, st.Root, before)
@@ -619,15 +619,21 @@ func (a *auditor) manifest() contract.Manifest {
 	return *a.m
 }
 
-// fail marks the run failed after an orchestration error.
-func (a *auditor) fail(cause error) {
+// fail ends the run after an orchestration error. If ctx was canceled the
+// error is a consequence of the interruption (for example a killed git
+// process), so the run is marked interrupted rather than failed.
+func (a *auditor) fail(ctx context.Context, cause error) {
 	if a.m == nil {
 		return
 	}
+	status, prefix := contract.RunFailed, "run failed: "
+	if ctx.Err() != nil {
+		status, prefix = contract.RunInterrupted, "run interrupted: "
+	}
 	now := a.opts.Now().UTC()
 	_ = a.update(func(m *contract.Manifest) error {
-		m.Status, m.FinishedAt = contract.RunFailed, &now
-		m.Warnings = append(m.Warnings, "run failed: "+cause.Error())
+		m.Status, m.FinishedAt = status, &now
+		m.Warnings = append(m.Warnings, prefix+cause.Error())
 		return nil
 	})
 }

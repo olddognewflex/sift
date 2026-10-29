@@ -181,6 +181,9 @@ Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
 				SiftVersion: d.Version, Log: d.Stderr, Now: d.Now,
 			})
 			if res == nil {
+				if err != nil && cmd.Context().Err() != nil {
+					return &ExitCodeError{ExitInterrupted, fmt.Errorf("audit interrupted before a run was created: %w", err)}
+				}
 				return err
 			}
 			m := res.Manifest
@@ -190,10 +193,12 @@ Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
 			}
 			fmt.Fprintf(d.Stdout, "Details: sift status --run %s\n", res.Run.ID)
 			switch {
+			case m.Status == contract.RunInterrupted && err != nil:
+				return &ExitCodeError{ExitInterrupted, fmt.Errorf("audit interrupted: %w", err)}
+			case m.Status == contract.RunInterrupted:
+				return &ExitCodeError{ExitInterrupted, errors.New("audit interrupted; results so far were saved")}
 			case err != nil:
 				return err
-			case m.Status == contract.RunInterrupted:
-				return &ExitCodeError{ExitInterrupted, errors.New("audit interrupted; partial results were saved")}
 			case m.Status == contract.RunPartial:
 				return &ExitCodeError{ExitPartial, errors.New("audit finished with incomplete results (see status)")}
 			case m.Status != contract.RunCompleted:
