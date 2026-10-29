@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -241,6 +242,88 @@ func TestExportSkipsFilesystemPathCollisions(t *testing.T) {
 		t.Error("case-sensitive filesystem must export every path")
 	}
 	if len(snap.Skipped) != 0 || snap.Files != 8 {
+		t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
+	}
+}
+
+func TestExportIncludeSkipsPathsSharingOneFile(t *testing.T) {
+	// With core.ignorecase unset, Git also lists Sub/b.txt, the on-disk
+	// spelling of tracked sub/b.txt, as untracked.
+	for _, ignorecase := range []string{"true", "false"} {
+		t.Run("ignorecase="+ignorecase, func(t *testing.T) {
+			repo := testutil.GitRepo(t, map[string]string{"main.go": "package main\n"})
+			testutil.Git(t, repo, "config", "core.ignorecase", ignorecase)
+			commitBlobs(t, repo, [][2]string{
+				{"A.txt", "upper\n"}, {"a.txt", "lower\n"},
+				{"Sub/a.txt", "first\n"}, {"sub/a.txt", "second\n"}, {"sub/b.txt", "own\n"},
+			})
+			testutil.WriteFiles(t, repo, map[string]string{"new.go": "untracked\n"}) // dirty on any filesystem
+			st, err := Inspect(ctx, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dest := filepath.Join(t.TempDir(), "snap")
+			snap, err := Export(ctx, st, contract.DirtyInclude, dest)
+			if err != nil {
+				t.Fatalf("export: %v", err)
+			}
+			if read(t, filepath.Join(dest, "new.go")) != "untracked\n" {
+				t.Error("unrelated files must still be exported")
+			}
+			upper, _ := os.Lstat(filepath.Join(repo, "A.txt"))
+			lower, _ := os.Lstat(filepath.Join(repo, "a.txt"))
+			if upper != nil && lower != nil && os.SameFile(upper, lower) { // case-insensitive filesystem
+				var want []string
+				for _, p := range []string{"A.txt", "Sub/a.txt", "a.txt", "sub/a.txt"} {
+					want = append(want, p+" ("+ambiguous+")")
+				}
+				if ignorecase == "false" {
+					want = append(want, "Sub/b.txt (untracked alias of tracked path sub/b.txt)")
+				}
+				got := append([]string(nil), snap.Skipped...)
+				sort.Strings(got)
+				sort.Strings(want)
+				if strings.Join(got, "|") != strings.Join(want, "|") || snap.Files != 3 {
+					t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
+				}
+				for _, p := range []string{"A.txt", "sub/a.txt"} {
+					if ok, _ := exists(filepath.Join(dest, p)); ok {
+						t.Errorf("content of ambiguous path %s must not be exported", p)
+					}
+				}
+				if read(t, filepath.Join(dest, "sub/b.txt")) != "own\n" {
+					t.Error("a tracked path with only untracked aliases keeps its content")
+				}
+				return
+			}
+			if read(t, filepath.Join(dest, "A.txt")) != "upper\n" || read(t, filepath.Join(dest, "a.txt")) != "lower\n" ||
+				read(t, filepath.Join(dest, "Sub/a.txt")) != "first\n" || read(t, filepath.Join(dest, "sub/a.txt")) != "second\n" {
+				t.Error("case-sensitive filesystem must export each path with its own content")
+			}
+			if len(snap.Skipped) != 0 || snap.Files != 7 {
+				t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
+			}
+		})
+	}
+}
+
+// Hard links reach the same-file check on any filesystem.
+func TestExportIncludeSkipsHardLinkedPaths(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"main.go": "package main\n"})
+	testutil.WriteFiles(t, repo, map[string]string{"one.txt": "shared\n"})
+	if err := os.Link(filepath.Join(repo, "one.txt"), filepath.Join(repo, "two.txt")); err != nil {
+		t.Skipf("hard links unsupported: %v", err)
+	}
+	st, err := Inspect(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Export(ctx, st, contract.DirtyInclude, filepath.Join(t.TempDir(), "snap"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"one.txt (" + ambiguous + ")", "two.txt (" + ambiguous + ")"}
+	if strings.Join(snap.Skipped, "|") != strings.Join(want, "|") || snap.Files != 1 {
 		t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
 	}
 }
