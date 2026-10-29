@@ -328,43 +328,127 @@ func readBatchObject(r *bufio.Reader) ([]byte, error) {
 	return data[:size], nil
 }
 
+const ambiguous = "resolves to the same file as another listed path, e.g. on a case-insensitive filesystem"
+
 // exportWorkingTree copies tracked and untracked, non-ignored files as they
 // exist on disk.
 func (w *writer) exportWorkingTree(ctx context.Context, root string) error {
-	list, err := git(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate")
+	cached, err := git(ctx, root, "ls-files", "-z", "--cached", "--deduplicate")
 	if err != nil {
 		return err
 	}
-	for _, rel := range strings.Split(string(list), "\x00") {
-		if rel == "" {
+	others, err := git(ctx, root, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return err
+	}
+	type listed struct {
+		rel     string
+		tracked bool
+	}
+	var list []listed
+	for _, rel := range strings.Split(string(cached), "\x00") {
+		list = append(list, listed{rel, true})
+	}
+	for _, rel := range strings.Split(string(others), "\x00") {
+		list = append(list, listed{rel, false})
+	}
+	type entry struct {
+		rel, full, skip string
+		tracked         bool
+	}
+	var entries []entry
+	var regular []os.FileInfo
+	var at []int // index in entries of each regular file
+	for _, l := range list {
+		if l.rel == "" {
 			continue
 		}
-		full := filepath.Join(root, filepath.FromSlash(rel))
-		fi, err := os.Lstat(full)
+		e := entry{rel: l.rel, full: filepath.Join(root, filepath.FromSlash(l.rel)), tracked: l.tracked}
+		fi, err := os.Lstat(e.full)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			continue // deleted in the working tree
 		case err != nil:
 			return err
 		case fi.Mode()&os.ModeSymlink != 0:
-			w.skip(rel, "symlink")
-			continue
+			e.skip = "symlink"
 		case fi.IsDir():
-			w.skip(rel, "submodule")
-			continue
+			e.skip = "submodule"
 		case !fi.Mode().IsRegular():
-			w.skip(rel, "not a regular file")
+			e.skip = "not a regular file"
+		default:
+			regular = append(regular, fi)
+			at = append(at, len(entries))
+		}
+		entries = append(entries, e)
+	}
+	// Git lists A.txt and a.txt separately, but on a case-insensitive
+	// filesystem both names open one file holding whichever blob was checked
+	// out last, so its content cannot be attributed to either path. With
+	// core.ignorecase unset, Git also lists the on-disk spelling of a folded
+	// path as untracked; that alias is dropped and the tracked path kept.
+	// Hard links are caught too and treated the same way on purpose: a
+	// path-based check would miss aliases such as NFC/NFD spellings on APFS,
+	// and Git never checks out hard links.
+	for _, g := range sameFileGroups(regular) {
+		var tracked []*entry
+		for _, i := range g {
+			if e := &entries[at[i]]; e.tracked {
+				tracked = append(tracked, e)
+			}
+		}
+		for _, i := range g {
+			switch e := &entries[at[i]]; {
+			case len(tracked) != 1:
+				e.skip = ambiguous
+			case e != tracked[0]:
+				e.skip = "untracked alias of tracked path " + tracked[0].rel
+			}
+		}
+	}
+	for _, e := range entries {
+		if e.skip != "" {
+			w.skip(e.rel, e.skip)
 			continue
 		}
-		data, err := os.ReadFile(full)
+		data, err := os.ReadFile(e.full)
 		if err != nil {
 			return err
 		}
-		if err := w.write(rel, data); err != nil {
+		if err := w.write(e.rel, data); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// sameFileGroups returns, as indexes into files, each set of two or more
+// entries that are the same on-disk file.
+func sameFileGroups(files []os.FileInfo) [][]int {
+	bySize := map[int64][]int{} // only files of equal size can be the same file
+	for i, fi := range files {
+		bySize[fi.Size()] = append(bySize[fi.Size()], i)
+	}
+	var groups [][]int
+	for _, b := range bySize {
+		grouped := map[int]bool{}
+		for x, i := range b {
+			if grouped[i] {
+				continue
+			}
+			g := []int{i}
+			for _, j := range b[x+1:] {
+				if !grouped[j] && os.SameFile(files[i], files[j]) {
+					g = append(g, j)
+					grouped[j] = true
+				}
+			}
+			if len(g) > 1 {
+				groups = append(groups, g)
+			}
+		}
+	}
+	return groups
 }
 
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
