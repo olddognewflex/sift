@@ -231,6 +231,22 @@ func TestExtractJSON(t *testing.T) {
 	}
 }
 
+// When nothing validates, the error must describe the last top-level object,
+// not a nested object inside it or an earlier example in the prose.
+func TestExtractJSONReportsOuterObjectError(t *testing.T) {
+	for text, want := range map[string]string{
+		`{"n":{"m":1}}`:                           "want integer",
+		`{"n":"7","e":[{"loc":{"line":1}}]}`:      "want integer",
+		`Example: {"x":1}. Answer: {"n":{"m":1}}`: "want integer",
+		`{"x":1} then {"n":"7"}`:                  "want integer",
+	} {
+		_, err := extractJSON(text, []byte(schemaDoc))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: got %v; want error containing %q", text, err, want)
+		}
+	}
+}
+
 func TestProbeRejectsOtherBinary(t *testing.T) {
 	claude := filepath.Join(t.TempDir(), "claude")
 	os.WriteFile(claude, []byte("#!/bin/sh\necho '2.1.311 (Claude Code)'\n"), 0o755)

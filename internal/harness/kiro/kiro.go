@@ -401,28 +401,34 @@ func parse(stdout, stderr []byte, runErr error, schemaDoc []byte, meta harness.M
 // asked for bare JSON sometimes wrap it in a code fence or prose, and the
 // prose may itself contain braces (code, examples), so every object in the
 // text is a candidate; the last one that validates wins.
+//
+// If none validates, the error comes from the last top-level object, since
+// that is the model's answer. Scanning backward meets its nested objects
+// first, so an object's error replaces the kept one only if the object
+// encloses it.
 func extractJSON(text string, schemaDoc []byte) (json.RawMessage, error) {
 	s := strings.TrimSpace(text)
 	var lastErr error
-	var found bool
+	errStart, errEnd := -1, -1 // span of the object lastErr describes
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] != '{' {
 			continue
 		}
+		dec := json.NewDecoder(strings.NewReader(s[i:]))
 		var raw json.RawMessage
-		if json.NewDecoder(strings.NewReader(s[i:])).Decode(&raw) != nil {
+		if dec.Decode(&raw) != nil {
 			continue
 		}
-		found = true
-		if err := schema.Validate(schemaDoc, raw); err != nil {
-			if lastErr == nil {
-				lastErr = err // the outermost-last object's error is the most useful
-			}
-			continue
+		err := schema.Validate(schemaDoc, raw)
+		if err == nil {
+			return raw, nil
 		}
-		return raw, nil
+		end := i + int(dec.InputOffset())
+		if errStart < 0 || end >= errEnd {
+			lastErr, errStart, errEnd = err, i, end
+		}
 	}
-	if !found {
+	if errStart < 0 {
 		return nil, errors.New("no JSON object in final message")
 	}
 	return nil, lastErr
