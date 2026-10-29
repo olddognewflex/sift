@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/olddognewflex/sift/internal/config"
 	"github.com/olddognewflex/sift/internal/contract"
@@ -140,6 +141,40 @@ func TestAuditExitCodes(t *testing.T) {
 	}
 	if code, _, _ := e.sift("audit"); code != ExitError {
 		t.Fatal("audit without a path must fail")
+	}
+}
+
+func TestAuditInterruptedDuringExportExits130(t *testing.T) {
+	e := newCLI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out, errb bytes.Buffer
+	d := Deps{Stdout: &out, Stderr: &errb, Version: "test",
+		NewHarness: func(config.Config) (harness.Harness, error) { return e.h, nil },
+		Now: func() time.Time {
+			if m, _ := filepath.Glob(filepath.Join(e.runs, "*", storage.AgentsDir, "*")); len(m) > 0 {
+				cancel()
+			}
+			return time.Now()
+		}}
+	code := Execute(ctx, d, []string{"--config", e.cfgPath, "audit", e.repo})
+	if code != ExitInterrupted || !strings.Contains(out.String(), "Status:  interrupted") || !strings.Contains(errb.String(), "audit interrupted: export snapshot") {
+		t.Fatalf("exit %d\n%s\n%s", code, out.String(), errb.String())
+	}
+}
+
+func TestAuditInterruptedBeforeRunExits130(t *testing.T) {
+	e := newCLI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	d := Deps{Stdout: &out, Stderr: &errb, Version: "test",
+		NewHarness: func(config.Config) (harness.Harness, error) { return e.h, nil }}
+	if code := Execute(ctx, d, []string{"--config", e.cfgPath, "audit", e.repo}); code != ExitInterrupted || !strings.Contains(errb.String(), "before a run was created") {
+		t.Fatalf("exit %d\n%s", code, errb.String())
+	}
+	if runs, _ := filepath.Glob(filepath.Join(e.runs, "*")); len(runs) != 0 {
+		t.Errorf("no run should exist, found %v", runs)
 	}
 }
 

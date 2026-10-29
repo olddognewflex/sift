@@ -422,6 +422,43 @@ func TestInterruptedRunKeepsPartialResults(t *testing.T) {
 	}
 }
 
+// cancelOnceAgentsWritten returns a clock that cancels the run once
+// initialize has written the agent files, i.e. just before the snapshot
+// export starts.
+func cancelOnceAgentsWritten(runsDir string, cancel context.CancelFunc) func() time.Time {
+	return func() time.Time {
+		if m, _ := filepath.Glob(filepath.Join(runsDir, "*", storage.AgentsDir, "*")); len(m) > 0 {
+			cancel()
+		}
+		return time.Now()
+	}
+}
+
+func TestInterruptDuringExportMarksRunInterrupted(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	res, err := Run(ctx, Options{RepoPath: e.repo, Config: e.cfg, Harness: e.h, Store: e.store, SiftVersion: "test",
+		Now: cancelOnceAgentsWritten(e.cfg.Storage.RunsDir, cancel)})
+	if err == nil || res == nil {
+		t.Fatalf("want a run and an export error, got %v, %v", res, err)
+	}
+	m := res.Manifest
+	if m.Status != contract.RunInterrupted {
+		t.Fatalf("status = %s, want %s", m.Status, contract.RunInterrupted)
+	}
+	if m.FinishedAt == nil {
+		t.Error("FinishedAt must be set")
+	}
+	if len(m.Warnings) == 0 || !strings.HasPrefix(m.Warnings[len(m.Warnings)-1], "run interrupted: ") {
+		t.Errorf("warnings = %q", m.Warnings)
+	}
+	var saved contract.Manifest
+	if err := res.Run.ReadJSON(storage.ManifestFile, &saved); err != nil || saved.Status != contract.RunInterrupted {
+		t.Errorf("saved status = %s, %v", saved.Status, err)
+	}
+}
+
 func TestDirtyTreeRefusedBeforeRunCreated(t *testing.T) {
 	e := newEnv(t)
 	testutil.WriteFiles(t, e.repo, map[string]string{"stats.go": "package stats\n"})
