@@ -423,14 +423,21 @@ func (w *writer) exportWorkingTree(ctx context.Context, root string) error {
 }
 
 // sameFileGroups returns, as indexes into files, each set of two or more
-// entries that are the same on-disk file.
+// entries that are the same on-disk file. Files are bucketed by device and
+// inode where the platform exposes them, so the pairwise os.SameFile scan
+// only runs within a bucket of real aliases. Elsewhere they are bucketed by
+// size, since only files of equal size can be the same file.
 func sameFileGroups(files []os.FileInfo) [][]int {
-	bySize := map[int64][]int{} // only files of equal size can be the same file
+	buckets := map[any][]int{}
 	for i, fi := range files {
-		bySize[fi.Size()] = append(bySize[fi.Size()], i)
+		k, ok := fileKey(fi)
+		if !ok {
+			k = fi.Size()
+		}
+		buckets[k] = append(buckets[k], i)
 	}
 	var groups [][]int
-	for _, b := range bySize {
+	for _, b := range buckets {
 		grouped := map[int]bool{}
 		for x, i := range b {
 			if grouped[i] {
