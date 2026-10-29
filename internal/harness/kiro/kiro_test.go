@@ -198,7 +198,7 @@ func TestRunFailures(t *testing.T) {
 		"prose":            {finish("I could not finish."), harness.ErrInvalidOutput, "no JSON object"},
 		"schema mismatch":  {finish(`{"n":"seven"}`), harness.ErrInvalidOutput, "want integer"},
 		"extra field":      {finish(`{"n":1,"x":2}`), harness.ErrInvalidOutput, "unexpected field"},
-		"malformed":        {finish(`{"n":1`), harness.ErrInvalidOutput, "no JSON object"},
+		"malformed":        {finish(`{"n":1`), harness.ErrInvalidOutput, "malformed JSON object"},
 		"init error":       {`echo '{"type":"runError","data":{"stage":"init","message":"Mode not found"}}'; exit 4`, harness.ErrUnsupported, "Mode not found"},
 		"run error":        {`echo '{"type":"runError","data":{"stage":"turn","message":"stream reset"}}'; exit 4`, harness.ErrProcess, "stream reset"},
 		"wrong shape":      {finish(`Example: {"x":1}. Answer: {"n":"7"}`), harness.ErrInvalidOutput, "want integer"},
@@ -220,9 +220,15 @@ func TestExtractJSON(t *testing.T) {
 	for text, want := range map[string]string{
 		`{"n":1}`:                         `{"n":1}`,
 		"Done.\n```json\n{\"n\": 2}\n```": `{"n": 2}`,
-		"I checked `func main() {` in x.go. {\"n\":3}": `{"n":3}`,
-		`Example: {"x":1}. Final: {"n":4} Thanks {`:    `{"n":4}`,
-		`{"n":5} then a stray example {"y":2}`:         `{"n":5}`,
+		"I checked `func main() {` in x.go. {\"n\":3}":               `{"n":3}`,
+		`Example: {"x":1}. Final: {"n":4} Thanks {`:                  `{"n":4}`,
+		`{"n":5} then a stray example {"y":2}`:                       `{"n":5}`,
+		"Use `{the}` braces, then {\"a\":1, oops. Answer: {\"n\":6}": `{"n":6}`,
+		// A broken attempt does not swallow an answer restarted after it.
+		"{\"a\": {\"b\": 1}\n{\"n\":8}":          `{"n":8}`,
+		`{"a": {"b": 1}{"n":9}`:                  `{"n":9}`,
+		`I tried {"n": "abc} and then: {"n":11}`: `{"n":11}`,
+		"{\"a\": {\"b\": 1}\n{\"n\":12}\nDone.":  `{"n":12}`,
 	} {
 		got, err := extractJSON(text, []byte(schemaDoc))
 		if err != nil || string(got) != want {
@@ -239,6 +245,24 @@ func TestExtractJSONReportsOuterObjectError(t *testing.T) {
 		`{"n":"7","e":[{"loc":{"line":1}}]}`:      "want integer",
 		`Example: {"x":1}. Answer: {"n":{"m":1}}`: "want integer",
 		`{"x":1} then {"n":"7"}`:                  "want integer",
+		// #19: a nested object that satisfies the schema is not the answer.
+		`{"n":"7","e":[{"n":1}]}`:      "want integer",
+		`{"n":"7","note":"{\"n\":1}"}`: "want integer",
+		`{"n":"7","x":"{"} tail`:       "want integer", // '{"' inside a string is not an object
+		// #18: a broken answer is reported as malformed, not by a nested
+		// object's schema error, and nothing that closes inside it before the
+		// break is accepted.
+		`{"n":"7","e":[{"loc":{"line":1}}]`: "malformed JSON object",
+		`{"n":{"m":1}, oops}`:               "malformed JSON object",
+		`{"n":"7","e":[{"n":1}]`:            "malformed JSON object",
+		`{"n":1,}`:                          "malformed JSON object",
+		`Example: {"n":"x"}. Answer: {"n":`: "malformed JSON object",
+		// A restart right after a broken key reads as that key's value, the
+		// same as a cut-off answer's nested object, so it is not accepted.
+		"{\"n\": \n{\"n\":10}":                        "malformed JSON object",
+		"```json\n{\"n\": \n{\"n\":10}\n```":          "malformed JSON object",
+		"{\"a\": {\"n\":1}":                           "malformed JSON object",
+		"```json\n{\"n\":\"7\",\"e\":[{\"n\":1}\n```": "malformed JSON object",
 	} {
 		_, err := extractJSON(text, []byte(schemaDoc))
 		if err == nil || !strings.Contains(err.Error(), want) {

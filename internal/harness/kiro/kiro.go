@@ -399,39 +399,79 @@ func parse(stdout, stderr []byte, runErr error, schemaDoc []byte, meta harness.M
 
 // extractJSON returns the JSON object in text that matches schemaDoc. Models
 // asked for bare JSON sometimes wrap it in a code fence or prose, and the
-// prose may itself contain braces (code, examples), so every object in the
-// text is a candidate; the last one that validates wins.
+// prose may itself contain braces (code, examples), so every top-level object
+// in the text is a candidate; the last one that validates wins. Objects
+// nested inside another are never candidates: they are parts of an answer,
+// not the answer, even when they happen to satisfy the schema.
 //
-// If none validates, the error comes from the last top-level object, since
-// that is the model's answer. Scanning backward meets its nested objects
-// first, so an object's error replaces the kept one only if the object
-// encloses it.
+// If none validates, the error describes the last top-level object, since
+// that is the model's answer. When that object does not parse, the error says
+// so rather than quoting a schema error from a fragment inside it.
 func extractJSON(text string, schemaDoc []byte) (json.RawMessage, error) {
 	s := strings.TrimSpace(text)
-	var lastErr error
-	errStart, errEnd := -1, -1 // span of the object lastErr describes
-	for i := len(s) - 1; i >= 0; i-- {
+	type object struct {
+		// end is the end of a well-formed object, or for a broken one the
+		// index of the byte where parsing broke (len(s) if the text ran out).
+		start, end int
+		raw        json.RawMessage
+		err        error // decode error, if the object does not parse
+		eof        bool  // broken because the text ended
+	}
+	// Collect the top-level objects in order. last is the latest one; a
+	// brace inside it may be nested in it.
+	var top []object
+	var last *object
+	for i := 0; i < len(s); i++ {
 		if s[i] != '{' {
 			continue
 		}
+		if last != nil && i < last.end && (last.err == nil || last.eof) {
+			continue // inside a well-formed object, or one cut off by the end
+		}
+		o := object{start: i}
 		dec := json.NewDecoder(strings.NewReader(s[i:]))
-		var raw json.RawMessage
-		if dec.Decode(&raw) != nil {
+		var se *json.SyntaxError
+		switch err := dec.Decode(&o.raw); {
+		case err == nil:
+			o.end = i + int(dec.InputOffset())
+		case errors.As(err, &se):
+			o.end, o.err = i+int(se.Offset)-1, err // Offset counts the bad byte
+		default: // unexpected EOF: everything after the brace parsed
+			o.end, o.err, o.eof = len(s), err, true
+		}
+		// A brace in prose or code ("{the}", "func main() {") is not an
+		// attempt at JSON; a broken object that opens with a key is.
+		if o.err != nil && !strings.HasPrefix(strings.TrimLeft(s[i+1:], " \t\r\n"), `"`) {
 			continue
 		}
-		err := schema.Validate(schemaDoc, raw)
-		if err == nil {
-			return raw, nil
+		// Inside an object broken by a syntax error, an object that closes
+		// at or before the break is part of it, even if it was meant as a
+		// restarted answer: the two look the same. One that runs past the
+		// break is a restart that the broken object's parser misread.
+		if last != nil && i < last.end && o.end <= last.end {
+			continue
 		}
-		end := i + int(dec.InputOffset())
-		if errStart < 0 || end >= errEnd {
-			lastErr, errStart, errEnd = err, i, end
+		top = append(top, o)
+		last = &top[len(top)-1]
+	}
+
+	var firstErr error
+	for k := len(top) - 1; k >= 0; k-- {
+		o := top[k]
+		err := o.err
+		if err != nil {
+			err = fmt.Errorf("malformed JSON object: %w", err)
+		} else if err = schema.Validate(schemaDoc, o.raw); err == nil {
+			return o.raw, nil
+		}
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
-	if errStart < 0 {
+	if firstErr == nil {
 		return nil, errors.New("no JSON object in final message")
 	}
-	return nil, lastErr
+	return nil, firstErr
 }
 
 // kiroAncestor returns the nearest ancestor of dir that contains a .kiro
