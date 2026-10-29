@@ -35,6 +35,26 @@ func TestInspectClean(t *testing.T) {
 	}
 }
 
+// With -z, git writes a rename as "R  new\0old\0". The original path belongs
+// to the rename entry; it is not an entry of its own.
+func TestInspectPairsRenamesWithOriginalPath(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"a.go": "package a\n\nconst A = 1\n", "c.go": "package c\n", "d.go": "package d\n\nconst D = 4\n"})
+	testutil.Git(t, repo, "mv", "a.go", "b.go") // staged rename: "R "
+	testutil.WriteFiles(t, repo, map[string]string{"c.go": "package c\n\n// changed\n"})
+	if err := os.Rename(filepath.Join(repo, "d.go"), filepath.Join(repo, "e.go")); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, repo, "add", "-N", "e.go") // worktree rename: " R"
+	st, err := Inspect(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"R  a.go -> b.go", " M c.go", " R d.go -> e.go"}
+	if strings.Join(st.Porcelain, "|") != strings.Join(want, "|") {
+		t.Fatalf("porcelain = %q, want %q", st.Porcelain, want)
+	}
+}
+
 func TestInspectErrors(t *testing.T) {
 	if _, err := Inspect(ctx, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not inside a Git repository") {
 		t.Fatalf("non-git dir: %v", err)

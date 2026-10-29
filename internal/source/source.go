@@ -78,12 +78,29 @@ func Inspect(ctx context.Context, path string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	for _, e := range strings.Split(string(status), "\x00") {
-		if e != "" {
-			st.Porcelain = append(st.Porcelain, e)
-		}
-	}
+	st.Porcelain = parsePorcelainZ(string(status))
 	return st, nil
+}
+
+// parsePorcelainZ splits `git status --porcelain=v1 -z` output into one
+// entry per path. With -z, a rename or copy (R or C in either status column)
+// is followed by its original path as a separate field; that field is folded
+// into the entry as "XY ORIG -> PATH", the form git uses without -z.
+func parsePorcelainZ(out string) []string {
+	var entries []string
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); i++ {
+		e := fields[i]
+		if e == "" {
+			continue
+		}
+		if len(e) > 3 && strings.ContainsAny(e[:2], "RC") && i+1 < len(fields) {
+			i++
+			e = e[:3] + fields[i] + " -> " + e[3:]
+		}
+		entries = append(entries, e)
+	}
+	return entries
 }
 
 // Fingerprint summarizes the repository's HEAD, status, uncommitted diff, and
