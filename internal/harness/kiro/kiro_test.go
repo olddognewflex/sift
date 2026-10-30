@@ -229,6 +229,14 @@ func TestExtractJSON(t *testing.T) {
 		`{"a": {"b": 1}{"n":9}`:                  `{"n":9}`,
 		`I tried {"n": "abc} and then: {"n":11}`: `{"n":11}`,
 		"{\"a\": {\"b\": 1}\n{\"n\":12}\nDone.":  `{"n":12}`,
+		// #22: a broken answer that closes is not mistaken for nesting a
+		// restart after it, nor one that its closing brace belongs to.
+		"{\"n\":\"7\",\"note\":\"say \"hi\" ok\"}\n{\"n\":13}": `{"n":13}`,
+		"{\"n\":1, oops\n{\"n\":15}\n(I dropped a `}` above.)": `{"n":15}`,
+		"{\"n\":1, oops\n{\"n\":16}\n} else {":                 `{"n":16}`,
+		"{\"n\":1 \"e\":[1,2]\n{\"n\":17}}":                    `{"n":17}`,
+		"{\"n\":\"7\" \"e\":[1,2]\n{\"n\":18}\n}":              `{"n":18}`,
+		`I tried {"n": "a"b} and then: {"n":14}`:               `{"n":14}`,
 	} {
 		got, err := extractJSON(text, []byte(schemaDoc))
 		if err != nil || string(got) != want {
@@ -256,7 +264,13 @@ func TestExtractJSONReportsOuterObjectError(t *testing.T) {
 		`{"n":{"m":1}, oops}`:               "malformed JSON object",
 		`{"n":"7","e":[{"n":1}]`:            "malformed JSON object",
 		`{"n":1,}`:                          "malformed JSON object",
-		`Example: {"n":"x"}. Answer: {"n":`: "malformed JSON object",
+		// #22: an object nested after a mid-object syntax error is still
+		// part of the broken answer, even with unescaped quotes in strings.
+		`{"n":"7","note":"say "hi" ok","e":[{"n":1}]}`:                    "malformed JSON object",
+		`{"n":"7","note":"5" tall","e":[{"n":1}]}`:                        "malformed JSON object",
+		`{"n":"7", "e": [x, {"n":1}]}`:                                    "malformed JSON object",
+		"```json\n{\"n\":\"7\",\"q\":\"a \"b\" c\",\"e\":{\"n\":1}}\n```": "malformed JSON object",
+		`Example: {"n":"x"}. Answer: {"n":`:                               "malformed JSON object",
 		// A restart right after a broken key reads as that key's value, the
 		// same as a cut-off answer's nested object, so it is not accepted.
 		"{\"n\": \n{\"n\":10}":                        "malformed JSON object",

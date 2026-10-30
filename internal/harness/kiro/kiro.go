@@ -416,6 +416,9 @@ func extractJSON(text string, schemaDoc []byte) (json.RawMessage, error) {
 		raw        json.RawMessage
 		err        error // decode error, if the object does not parse
 		eof        bool  // broken because the text ended
+		// close is, for an object broken by a syntax error, the end of its
+		// closing brace found by looseClose, or -1 if it never closes.
+		close int
 	}
 	// Collect the top-level objects in order. last is the latest one; a
 	// brace inside it may be nested in it.
@@ -435,7 +438,7 @@ func extractJSON(text string, schemaDoc []byte) (json.RawMessage, error) {
 		case err == nil:
 			o.end = i + int(dec.InputOffset())
 		case errors.As(err, &se):
-			o.end, o.err = i+int(se.Offset)-1, err // Offset counts the bad byte
+			o.end, o.err, o.close = i+int(se.Offset)-1, err, -1 // Offset counts the bad byte
 		default: // unexpected EOF: everything after the brace parsed
 			o.end, o.err, o.eof = len(s), err, true
 		}
@@ -444,12 +447,23 @@ func extractJSON(text string, schemaDoc []byte) (json.RawMessage, error) {
 		if o.err != nil && !strings.HasPrefix(strings.TrimLeft(s[i+1:], " \t\r\n"), `"`) {
 			continue
 		}
+		if o.err != nil && !o.eof {
+			o.close = looseClose(s, i)
+		}
 		// Inside an object broken by a syntax error, an object that closes
-		// at or before the break is part of it, even if it was meant as a
-		// restarted answer: the two look the same. One that runs past the
-		// break is a restart that the broken object's parser misread.
-		if last != nil && i < last.end && o.end <= last.end {
-			continue
+		// before the broken one's own closing brace is part of it. One whose
+		// closing brace is that brace is a restart that the loose scan
+		// misread as the broken object's end. If the broken object never
+		// closes, an object that closes at or before the break is part of
+		// it, even if it was meant as a restarted answer: the two look the
+		// same. One that runs past the break is a restart.
+		if last != nil {
+			if last.close > 0 && i < last.close && o.end < last.close {
+				continue
+			}
+			if last.close < 0 && i < last.end && o.end <= last.end {
+				continue
+			}
 		}
 		top = append(top, o)
 		last = &top[len(top)-1]
@@ -472,6 +486,83 @@ func extractJSON(text string, schemaDoc []byte) (json.RawMessage, error) {
 		return nil, errors.New("no JSON object in final message")
 	}
 	return nil, firstErr
+}
+
+// looseClose returns the index just past the brace that closes the object
+// opening at s[i], or -1 if it never closes. Unlike a JSON parser it reads
+// past some syntax errors, so it can find the end of a broken answer:
+//   - Inside a string, a quote ends the string only if the next non-space
+//     byte could follow a string in JSON (, : } ] or the end of the text),
+//     which always holds in valid JSON. Unescaped quotes in a string are
+//     read as part of it.
+//   - Outside strings, a bare word other than true, false or null is
+//     allowed only where a value or key could stand (followed by , : } ]).
+//
+// It gives up where the text cannot be JSON past this point: prose
+// punctuation, or an object or array opening where no value can stand
+// (anywhere but after a colon, or first or after a comma in an array). A
+// restarted answer after a broken one, or a stray brace in prose after the
+// answer, then cannot "close" the broken object.
+func looseClose(s string, i int) int {
+	nextIs := func(j int, set string) bool {
+		rest := strings.TrimLeft(s[j:], " \t\r\n")
+		return rest != "" && strings.ContainsRune(set, rune(rest[0]))
+	}
+	var stack []byte // open containers, '{' or '['
+	prev := byte(0)  // previous token: ':' ',' '{' '[' or 'v' for a value
+	inString := false
+	for j := i; j < len(s); j++ {
+		c := s[j]
+		if inString {
+			switch {
+			case c == '\\':
+				j++
+			case c == '"':
+				if inString = strings.TrimLeft(s[j+1:], " \t\r\n") != "" && !nextIs(j+1, ",:}]"); !inString {
+					prev = 'v'
+				}
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			inString = true
+		case c == '{' || c == '[':
+			inArray := len(stack) > 0 && stack[len(stack)-1] == '['
+			if !(prev == 0 || prev == ':' || inArray && (prev == '[' || prev == ',')) {
+				return -1
+			}
+			stack, prev = append(stack, c), c
+		case c == '}' || c == ']':
+			stack, prev = stack[:len(stack)-1], 'v'
+			if len(stack) == 0 {
+				if c == '}' {
+					return j + 1
+				}
+				return -1
+			}
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+		case c == ',' || c == ':':
+			prev = c
+		case c == '-' || c >= '0' && c <= '9':
+			for j+1 < len(s) && strings.IndexByte("0123456789eE.+-", s[j+1]) >= 0 {
+				j++
+			}
+			prev = 'v'
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_':
+			k := j
+			for k < len(s) && (s[k] >= 'a' && s[k] <= 'z' || s[k] >= 'A' && s[k] <= 'Z' || s[k] >= '0' && s[k] <= '9' || s[k] == '_') {
+				k++
+			}
+			if w := s[j:k]; w != "true" && w != "false" && w != "null" && !nextIs(k, ",:}]") {
+				return -1
+			}
+			j, prev = k-1, 'v'
+		default:
+			return -1
+		}
+	}
+	return -1
 }
 
 // kiroAncestor returns the nearest ancestor of dir that contains a .kiro
