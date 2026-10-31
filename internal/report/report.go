@@ -89,11 +89,15 @@ func Load(run *storage.Run) (*Data, error) {
 	if err != nil || !ok {
 		return d, err
 	}
+	// Check for final findings before reading decisions. Decisions are
+	// never written after findings.json, so if it exists now, the decisions
+	// read next are final too, even if validation finishes during Load.
+	validated := run.Exists(storage.FindingsFile)
 	var decs contract.DecisionSet
 	if _, err := optional(storage.DecisionsFile, &decs); err != nil {
 		return nil, err
 	}
-	merged, err := findings.Merge(cands.Findings, decs.Decisions)
+	merged, err := finalFindings(run, validated, cands.Findings, decs.Decisions)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +118,22 @@ func Load(run *storage.Run) (*Data, error) {
 		d.Items = append(d.Items, it)
 	}
 	return d, nil
+}
+
+// finalFindings returns the run's final finding states. Validation writes
+// them to findings.json, which is the canonical source. A run whose
+// validation did not finish (interrupted, or still running) has no
+// findings.json, so its states are derived from the candidates and the
+// decisions recorded so far.
+func finalFindings(run *storage.Run, validated bool, cands []contract.Finding, decs []contract.DecisionRecord) ([]contract.Finding, error) {
+	if !validated {
+		return findings.Merge(cands, decs)
+	}
+	var final contract.FindingSet
+	if err := run.ReadJSON(storage.FindingsFile, &final); err != nil {
+		return nil, err
+	}
+	return final.Findings, nil
 }
 
 // Generate renders all reports into the run's report directory.
