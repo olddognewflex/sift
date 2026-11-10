@@ -79,6 +79,13 @@ enforces the JSON Schema.
 | Agent execution result | `ExecutionResult` | `executions/<task>/…/attempt-N/result.json` |
 | Report metadata | `ReportMeta` | `report/report.json` |
 
+`artifacts/findings.json` is the canonical record of final finding states.
+Reports, `sift findings`, and `sift status` read it. Validation writes it
+once all findings have been attempted. A run whose validation did not
+finish (interrupted, or still running) has no `findings.json`. Its states
+are derived from `candidates.json` and the decisions recorded so far, and
+any finding without a decision is `unvalidated`.
+
 Published JSON Schemas live in `schemas/`, generated from the Go types (`make
 schemas`). A test fails if they drift.
 
@@ -108,9 +115,11 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   evidence item is verified, none is contradicted, and every location
   exists. Otherwise the finding is `needs_investigation`.
 - A finding whose validation failed is `unvalidated`, never accepted.
-- Candidates are never modified. The final state is derived from
-  candidates plus decision records (`findings.Merge`), so an interrupted
-  validation still reports correctly.
+- Candidates are never modified. The final state is derived once, from
+  candidates plus decision records (`findings.Merge`), and stored in
+  `findings.json`. If validation did not finish, the report derives it the
+  same way from the decisions recorded so far, so the run still reports
+  correctly.
 
 ## Run status
 

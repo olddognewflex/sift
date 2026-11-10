@@ -91,7 +91,7 @@ func TestAuditCompletes(t *testing.T) {
 		}
 	}
 
-	// Candidates are preserved unmodified; final state lives in decisions.
+	// Candidates are preserved unmodified; final state lives in findings.json.
 	var cands contract.FindingSet
 	if err := res.Run.ReadJSON(storage.CandidatesFile, &cands); err != nil {
 		t.Fatal(err)
@@ -373,6 +373,10 @@ func TestInterruptedValidationKeepsDecisions(t *testing.T) {
 	if s := res.Manifest.Task("validation").Status; s != contract.TaskInterrupted {
 		t.Errorf("validation = %s", s)
 	}
+	// Validation never finished, so states come from the decisions so far.
+	if res.Run.Exists(storage.FindingsFile) {
+		t.Fatal("interrupted validation must not write final findings")
+	}
 	// Findings are validated in order: ARCH-001, CORR-001, CORR-002, ...
 	got := states(t, res.Run)
 	want := map[string]contract.ValidationState{
@@ -522,6 +526,38 @@ func TestExcessFindingsAreTruncated(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(res.Manifest.Warnings, "\n"), "only the first 1 were kept") {
 		t.Errorf("warnings = %v", res.Manifest.Warnings)
+	}
+}
+
+func TestReportReadsFinalFindings(t *testing.T) {
+	e := newEnv(t)
+	res, err := e.run(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final contract.FindingSet
+	if err := res.Run.ReadJSON(storage.FindingsFile, &final); err != nil {
+		t.Fatal(err)
+	}
+	// Change one final state so that it no longer matches what the
+	// candidates and decisions would produce. The report must show it.
+	var changed string
+	for i, f := range final.Findings {
+		if f.State == contract.StateConfirmed {
+			changed = f.ID
+			final.Findings[i].State = contract.StateRejected
+			final.Findings[i].StateReason = "edited for test"
+			break
+		}
+	}
+	if changed == "" {
+		t.Fatal("no confirmed finding to edit")
+	}
+	if err := res.Run.WriteJSON(storage.FindingsFile, &final); err != nil {
+		t.Fatal(err)
+	}
+	if got := states(t, res.Run)[changed]; got != contract.StateRejected {
+		t.Errorf("%s = %s, want the state from findings.json (%s)", changed, got, contract.StateRejected)
 	}
 }
 
