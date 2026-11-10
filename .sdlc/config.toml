@@ -1,0 +1,55 @@
+# tkt hybrid config for sift — SHARED markdown board + per-repo VCS/build.
+# Board/state live under /Users/raymonddoran/Development/odnf/.sdlc/.
+# go module, Makefile targets
+
+[ticketing]
+provider = "markdown"
+project  = "SIFT"          # ticket key prefix on the shared board (SIFT-1, SIFT-2, ...)
+
+[markdown]
+board_dir = "/Users/raymonddoran/Development/odnf/.sdlc/board"   # SHARED across all ODNF repos
+state_dir = "/Users/raymonddoran/Development/odnf/.sdlc/state"   # SHARED history + worklog sidecars
+me        = "raymond"
+
+[board.roles]
+backlog     = "Backlog"
+todo        = "To Do"
+in_progress = "In Progress"
+review      = "In Review"
+done        = "Done"
+blocked     = "Blocked"
+archived    = "Archived"
+
+[board.ownership]
+"todo->in_progress"   = "agent"
+"in_progress->review" = "agent"
+"review->done"        = "agent"
+
+[issue_types]
+full_sdlc   = ["Story", "Bug", "Sub-task"]
+deliverable = ["Task", "Chore", "Spike", "Epic"]
+
+[queries]
+all          = 'ORDER BY key ASC'   # every ticket on the board (used by tktban)
+tier1        = 'status = "To Do" AND priority = "Highest" AND assignee = currentUser() AND type != "Epic" ORDER BY priority DESC'
+tier2        = 'status = "To Do" AND assignee = currentUser() AND type != "Epic" ORDER BY priority DESC'
+blocked      = 'status = "Blocked"'
+deploy_ready = 'status = "Done"'
+
+[timetracking]
+provider = "local"
+
+[vcs]
+provider       = "github"
+repo           = "olddognewflex/sift"
+default_branch = "main"
+branch_fmt     = "feature/{key-lower}-{slug}"
+hotfix_fmt     = "hotfix/{key-lower}-{slug}"
+reviewers      = []
+merge          = "squash"
+
+[build]
+build     = "make build"
+test      = "make test"
+typecheck = "go vet ./..."
+lint      = "make lint"
