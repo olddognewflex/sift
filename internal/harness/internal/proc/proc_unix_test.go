@@ -403,10 +403,15 @@ exit 0`)
 // stdout and stderr close when the harness exits; only the stdin writer is
 // stuck, on a pipe whose reader never reads and never dies to the group
 // kill. Lingered is expected: the stdin copy had not finished.
+//
+// Without job control, POSIX gives a background command /dev/null as stdin
+// before its own redirections apply, so dash turns "<&0 &" into /dev/null.
+// Saving stdin on fd 3 first keeps the pipe.
 func TestRunReturnsWhenEscapedChildHoldsUnreadStdin(t *testing.T) {
 	t.Parallel()
 	pidFile := filepath.Join(t.TempDir(), "pids")
-	bin := script(t, escaped(t)+`sleep 6 <&0 >/dev/null 2>&1 &
+	bin := script(t, `exec 3<&0
+`+escaped(t)+`sleep 6 <&3 3<&- >/dev/null 2>&1 &
 echo "$$ $!" > `+pidFile+`
 exit 0`)
 	start := time.Now()
