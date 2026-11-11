@@ -68,6 +68,8 @@ type Meta struct {
 	PermissionDenials int
 	ExitCode          int
 	Duration          time.Duration
+	// Warnings lists non-fatal anomalies observed during execution.
+	Warnings []string
 }
 
 // ErrorKind classifies execution failures so the orchestrator can decide

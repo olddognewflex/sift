@@ -147,6 +147,29 @@ func TestRunFailures(t *testing.T) {
 	}
 }
 
+// QA Author — adversarial tests
+// Break-It dimensions covered: Partial Failure (valid result, but a leftover
+// child holds the output open), Time (must not stall for KillGrace).
+func TestRunWarnsWhenLeftoverHoldsOutput(t *testing.T) {
+	bin := fakeClaude(t, `echo '{"type":"result","subtype":"success","is_error":false,"result":"{}","structured_output":{"verdict":"reject"}}'
+sleep 15 &`)
+	start := time.Now()
+	res, err := New(bin).Run(context.Background(), request(t))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.Output) != `{"verdict":"reject"}` {
+		t.Errorf("output = %s", res.Output)
+	}
+	if len(res.Meta.Warnings) != 1 {
+		t.Errorf("warnings = %q, want one", res.Meta.Warnings)
+	}
+	if elapsed >= 5*time.Second {
+		t.Errorf("Run took %s", elapsed)
+	}
+}
+
 func TestRunTimeoutKillsProcessGroup(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "child-survived")
 	// The child ignores nothing special; it must die with the group.

@@ -28,6 +28,9 @@ claude --print --output-format json --json-schema <schema>
 It runs with the snapshot as its working directory, takes the prompt on
 stdin, runs in its own process group, gets SIGTERM on cancel or timeout and
 SIGKILL after a 10s grace period, and has any leftover group members killed.
+After the harness exits, whatever its exit code, Sift keeps reading output
+for up to 2s more; if a leftover child still holds stdio open then, the group
+is killed, Sift stops reading, and a warning is recorded.
 
 ### Verified behavior (Claude Code 2.1.311, 2026-10-27)
 

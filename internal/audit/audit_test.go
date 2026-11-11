@@ -585,3 +585,61 @@ func TestReportRegeneratesFromArtifacts(t *testing.T) {
 		t.Errorf("meta = %+v", meta)
 	}
 }
+
+// warningHarness adds a warning to the Meta of every execution of one agent,
+// successful or failed.
+type warningHarness struct {
+	*fake.Harness
+	agent, msg string
+}
+
+func (h warningHarness) Run(ctx context.Context, req harness.Request) (harness.Result, error) {
+	res, err := h.Harness.Run(ctx, req)
+	if req.Agent != h.agent {
+		return res, err
+	}
+	var he *harness.Error
+	if errors.As(err, &he) {
+		he.Meta.Warnings = append(he.Meta.Warnings, h.msg)
+	}
+	res.Meta.Warnings = append(res.Meta.Warnings, h.msg)
+	return res, err
+}
+
+func TestHarnessWarningsAreRecorded(t *testing.T) {
+	const msg = "a leftover process held its output open"
+	for _, tc := range []struct {
+		name string
+		fail bool
+		want int // warnings: one per attempt
+	}{
+		{"success", false, 1},
+		{"failure", true, 2}, // process failures retry once
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			if tc.fail {
+				e.h.Responders["architecture"] = fake.Fail(harness.ErrProcess, "crashed")
+			}
+			h := warningHarness{Harness: e.h, agent: "architecture", msg: msg}
+			res, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: h, Store: e.store, SiftVersion: "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, w := range res.Manifest.Warnings {
+				if strings.Contains(w, msg) {
+					got = append(got, w)
+				}
+			}
+			if len(got) != tc.want {
+				t.Fatalf("harness warnings = %q, want %d (all warnings %q)", got, tc.want, res.Manifest.Warnings)
+			}
+			for _, w := range got {
+				if !strings.HasPrefix(w, "architecture (") || !strings.Contains(w, "(see executions/") {
+					t.Errorf("warning %q should name the agent and its execution directory", w)
+				}
+			}
+		})
+	}
+}
