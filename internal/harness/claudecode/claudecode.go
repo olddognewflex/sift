@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/olddognewflex/sift/internal/harness"
+	"github.com/olddognewflex/sift/internal/harness/internal/proc"
 )
 
 const (
@@ -41,26 +41,13 @@ var requiredFlags = []string{
 	"--system-prompt", "--model",
 }
 
-// killGrace is how long the harness gets to exit after SIGTERM.
-const killGrace = 10 * time.Second
-
 type Harness struct {
 	Binary string
 }
 
 // New returns a harness running binary; empty selects DefaultBinary.
 func New(binary string) *Harness {
-	if binary == "" {
-		binary = DefaultBinary
-	}
-	// A path like ./bin/x is relative to Sift's working directory, but the
-	// harness runs elsewhere; resolve it now. Bare names use PATH.
-	if strings.ContainsRune(binary, filepath.Separator) && !filepath.IsAbs(binary) {
-		if abs, err := filepath.Abs(binary); err == nil {
-			binary = abs
-		}
-	}
-	return &Harness{Binary: binary}
+	return &Harness{Binary: proc.ResolveBinary(binary, DefaultBinary)}
 }
 
 var versionPattern = regexp.MustCompile(`(\d+\.\d+\.\d+)`)
@@ -147,37 +134,22 @@ func (h *Harness) Run(ctx context.Context, req harness.Request) (harness.Result,
 	if req.WorkDir == "" || len(req.OutputSchema) == 0 || req.Timeout <= 0 {
 		return harness.Result{}, &harness.Error{Kind: harness.ErrUnsupported, Msg: "request needs WorkDir, OutputSchema and Timeout"}
 	}
-	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, h.Binary, Args(req)...)
-	cmd.Dir = req.WorkDir
-	cmd.Stdin = strings.NewReader(req.Prompt)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	setProcessGroup(cmd)
-	cmd.Cancel = func() error { return terminate(cmd) }
-	cmd.WaitDelay = killGrace
-
-	start := time.Now()
-	runErr := cmd.Run()
-	if cmd.Process != nil {
-		killGroup(cmd) // reap anything the harness left behind
-	}
-	meta := harness.Meta{Duration: time.Since(start), ExitCode: cmd.ProcessState.ExitCode()}
+	o := proc.Run(ctx, req.Timeout, proc.Spec{
+		Binary: h.Binary,
+		Args:   Args(req),
+		Dir:    req.WorkDir,
+		Stdin:  strings.NewReader(req.Prompt),
+	})
+	meta := harness.Meta{Duration: o.Duration, ExitCode: o.ExitCode}
 	if req.LogDir != "" {
-		if err := writeLogs(req.LogDir, stdout.Bytes(), stderr.Bytes()); err != nil {
+		if err := writeLogs(req.LogDir, o.Stdout, o.Stderr); err != nil {
 			return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: "persist harness output", Meta: meta, Err: err}
 		}
 	}
-
-	switch {
-	case ctx.Err() != nil:
-		return harness.Result{}, &harness.Error{Kind: harness.ErrCanceled, Msg: "execution canceled", Meta: meta, Err: ctx.Err()}
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return harness.Result{}, &harness.Error{Kind: harness.ErrTimeout, Msg: fmt.Sprintf("no result within %s", req.Timeout), Meta: meta}
+	if err := o.Failure(meta); err != nil {
+		return harness.Result{}, err
 	}
-	return parse(stdout.Bytes(), stderr.Bytes(), runErr, meta)
+	return parse(o.Stdout, o.Stderr, o.RunErr, meta)
 }
 
 type envelope struct {
@@ -203,7 +175,7 @@ func parse(stdout, stderr []byte, runErr error, meta harness.Meta) (harness.Resu
 		if runErr != nil {
 			msg = fmt.Sprintf("harness exited with code %d", meta.ExitCode)
 		}
-		return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: msg + tail(stderr), Meta: meta, Err: runErr}
+		return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: msg + proc.Tail(stderr), Meta: meta, Err: runErr}
 	}
 	meta.SessionID = env.SessionID
 	meta.CostUSD = env.TotalCostUSD
@@ -223,13 +195,13 @@ func parse(stdout, stderr []byte, runErr error, meta harness.Meta) (harness.Resu
 		}
 		detail := strings.Join(env.Errors, "; ")
 		if detail == "" {
-			detail = truncate(env.Result, 500)
+			detail = proc.Truncate(env.Result, 500)
 		}
 		return harness.Result{}, &harness.Error{Kind: kind, Msg: fmt.Sprintf("harness reported %s (%s): %s", env.Subtype, env.TerminalReason, detail), Meta: meta}
 	}
 	out := bytes.TrimSpace(env.StructuredOutput)
 	if len(out) == 0 || string(out) == "null" {
-		return harness.Result{}, &harness.Error{Kind: harness.ErrInvalidOutput, Msg: "harness returned no structured output; final text: " + truncate(env.Result, 300), Meta: meta}
+		return harness.Result{}, &harness.Error{Kind: harness.ErrInvalidOutput, Msg: "harness returned no structured output; final text: " + proc.Truncate(env.Result, 300), Meta: meta}
 	}
 	return harness.Result{Output: json.RawMessage(out), Meta: meta}, nil
 }
@@ -242,22 +214,4 @@ func writeLogs(dir string, stdout, stderr []byte) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "harness-stderr.log"), stderr, 0o644)
-}
-
-func tail(stderr []byte) string {
-	s := strings.TrimSpace(string(stderr))
-	if s == "" {
-		return ""
-	}
-	if len(s) > 500 {
-		s = "…" + s[len(s)-500:]
-	}
-	return ": " + s
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

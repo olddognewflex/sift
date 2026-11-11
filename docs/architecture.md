@@ -50,6 +50,7 @@ each decision is saved as soon as it is made. The report always runs.
 | `internal/harness` | Harness interface, request/result, typed errors |
 | `internal/harness/claudecode` | Claude Code adapter (ADR 0002) |
 | `internal/harness/kiro` | Kiro CLI adapter: private home, empty workspace, schema validated by Sift (ADR 0005) |
+| `internal/harness/internal/proc` | Shared harness subprocess lifecycle: timeout, cancellation, process-group kill |
 | `internal/harness/fake` | Deterministic harness for tests |
 | `internal/harness/conformance` | Live suite every adapter must pass: isolation, structured output, timeouts, budgets |
 | `internal/findings` | Finding IDs, mechanical evidence checks, state transitions, evidence gate |
