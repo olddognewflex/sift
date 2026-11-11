@@ -140,7 +140,7 @@ func (h *Harness) Run(ctx context.Context, req harness.Request) (harness.Result,
 		Dir:    req.WorkDir,
 		Stdin:  strings.NewReader(req.Prompt),
 	})
-	meta := harness.Meta{Duration: o.Duration, ExitCode: o.ExitCode}
+	meta := harness.Meta{Duration: o.Duration, ExitCode: o.ExitCode, Warnings: o.Warnings()}
 	if req.LogDir != "" {
 		if err := writeLogs(req.LogDir, o.Stdout, o.Stderr); err != nil {
 			return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: "persist harness output", Meta: meta, Err: err}

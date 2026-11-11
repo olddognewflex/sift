@@ -258,7 +258,7 @@ func (h *Harness) Run(ctx context.Context, req harness.Request) (harness.Result,
 		Env:    append(withoutEnv(os.Environ(), "KIRO_HOME"), "KIRO_HOME="+home),
 		Stdin:  strings.NewReader(input(req)),
 	})
-	meta := harness.Meta{Duration: o.Duration, ExitCode: o.ExitCode, Model: model(req)}
+	meta := harness.Meta{Duration: o.Duration, ExitCode: o.ExitCode, Model: model(req), Warnings: o.Warnings()}
 	if req.LogDir != "" {
 		if err := writeLogs(req.LogDir, agent, o.Stdout, o.Stderr); err != nil {
 			return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: "persist harness output", Meta: meta, Err: err}

@@ -528,6 +528,9 @@ func execute[T any, PT interface {
 		if meta.PermissionDenials > 0 {
 			a.warn(fmt.Sprintf("%s (%s) attempted %d out-of-policy tool call(s); the harness denied them (see %s)", def.Name, execKey, meta.PermissionDenials, rel))
 		}
+		for _, w := range meta.Warnings {
+			a.warn(fmt.Sprintf("%s (%s): %s (see %s)", def.Name, execKey, w, rel))
+		}
 		if err == nil {
 			return out, nil
 		}

@@ -189,6 +189,30 @@ func TestRunIsolatesAndParses(t *testing.T) {
 	}
 }
 
+// QA Author — adversarial tests
+// Break-It dimensions covered: Partial Failure (kiro exits after a valid
+// result but leaves a child holding stdout), Error Propagation (the drain
+// warning must reach Meta, not be dropped by the adapter), Time (bounded by
+// DrainGrace, not the child's lifetime).
+func TestRunWarnsWhenLeftoverHoldsOutput(t *testing.T) {
+	bin := fakeKiro(t, finish("```json\n{\"n\": 3}\n```")+"\nsleep 15 &")
+	start := time.Now()
+	res, err := New(bin).Run(context.Background(), request(t))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.Output) != `{"n": 3}` {
+		t.Errorf("output = %s", res.Output)
+	}
+	if len(res.Meta.Warnings) != 1 {
+		t.Errorf("warnings = %q, want one", res.Meta.Warnings)
+	}
+	if elapsed >= 5*time.Second {
+		t.Errorf("Run took %s", elapsed)
+	}
+}
+
 func TestRunFailures(t *testing.T) {
 	cases := map[string]struct {
 		chat string
