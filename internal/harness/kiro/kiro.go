@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/olddognewflex/sift/internal/harness"
+	"github.com/olddognewflex/sift/internal/harness/internal/proc"
 	"github.com/olddognewflex/sift/internal/schema"
 )
 
@@ -55,24 +56,12 @@ var requiredFlags = []string{"--no-interactive", "--agent", "--agent-engine", "-
 // requiredSetting must appear in `kiro-cli settings list --all`.
 const requiredSetting = "chat.disableInheritingDefaultResources"
 
-const killGrace = 10 * time.Second
-
 type Harness struct {
 	Binary string
 }
 
 func New(binary string) *Harness {
-	if binary == "" {
-		binary = DefaultBinary
-	}
-	// A path like ./bin/x is relative to Sift's working directory, but the
-	// harness runs elsewhere; resolve it now. Bare names use PATH.
-	if strings.ContainsRune(binary, filepath.Separator) && !filepath.IsAbs(binary) {
-		if abs, err := filepath.Abs(binary); err == nil {
-			binary = abs
-		}
-	}
-	return &Harness{Binary: binary}
+	return &Harness{Binary: proc.ResolveBinary(binary, DefaultBinary)}
 }
 
 var versionPattern = regexp.MustCompile(`(\d+\.\d+\.\d+)`)
@@ -262,38 +251,23 @@ func (h *Harness) Run(ctx context.Context, req harness.Request) (harness.Result,
 		return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: "prepare private kiro home", Err: err}
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, h.Binary, Args(name, req)...)
-	cmd.Dir = workspace
-	cmd.Env = append(withoutEnv(os.Environ(), "KIRO_HOME"), "KIRO_HOME="+home)
-	cmd.Stdin = strings.NewReader(input(req))
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	setProcessGroup(cmd)
-	cmd.Cancel = func() error { return terminate(cmd) }
-	cmd.WaitDelay = killGrace
-
-	start := time.Now()
-	runErr := cmd.Run()
-	if cmd.Process != nil {
-		killGroup(cmd)
-	}
-	meta := harness.Meta{Duration: time.Since(start), ExitCode: cmd.ProcessState.ExitCode(), Model: model(req)}
+	o := proc.Run(ctx, req.Timeout, proc.Spec{
+		Binary: h.Binary,
+		Args:   Args(name, req),
+		Dir:    workspace,
+		Env:    append(withoutEnv(os.Environ(), "KIRO_HOME"), "KIRO_HOME="+home),
+		Stdin:  strings.NewReader(input(req)),
+	})
+	meta := harness.Meta{Duration: o.Duration, ExitCode: o.ExitCode, Model: model(req)}
 	if req.LogDir != "" {
-		if err := writeLogs(req.LogDir, agent, stdout.Bytes(), stderr.Bytes()); err != nil {
+		if err := writeLogs(req.LogDir, agent, o.Stdout, o.Stderr); err != nil {
 			return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: "persist harness output", Meta: meta, Err: err}
 		}
 	}
-	switch {
-	case ctx.Err() != nil:
-		return harness.Result{}, &harness.Error{Kind: harness.ErrCanceled, Msg: "execution canceled", Meta: meta, Err: ctx.Err()}
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return harness.Result{}, &harness.Error{Kind: harness.ErrTimeout, Msg: fmt.Sprintf("no result within %s", req.Timeout), Meta: meta}
-	case cmd.ProcessState == nil:
-		return harness.Result{}, &harness.Error{Kind: harness.ErrUnsupported, Msg: "start kiro-cli", Meta: meta, Err: runErr}
+	if err := o.Failure(meta); err != nil {
+		return harness.Result{}, err
 	}
-	return parse(stdout.Bytes(), stderr.Bytes(), runErr, req.OutputSchema, meta)
+	return parse(o.Stdout, o.Stderr, o.RunErr, req.OutputSchema, meta)
 }
 
 // setupPrivate writes the private KIRO_HOME (agent definition and settings)
@@ -384,7 +358,7 @@ func parse(stdout, stderr []byte, runErr error, schemaDoc []byte, meta harness.M
 		if runErr != nil {
 			msg = fmt.Sprintf("harness exited with code %d", meta.ExitCode)
 		}
-		return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: msg + tail(stderr), Meta: meta, Err: runErr}
+		return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: msg + proc.Tail(stderr), Meta: meta, Err: runErr}
 	case finished.Data.Status != "success":
 		return harness.Result{}, &harness.Error{Kind: harness.ErrProcess, Msg: fmt.Sprintf("harness reported %s (%s)", finished.Data.Status, finished.Data.StopReason), Meta: meta}
 	case finished.Data.FinalTextTruncated:
@@ -392,7 +366,7 @@ func parse(stdout, stderr []byte, runErr error, schemaDoc []byte, meta harness.M
 	}
 	out, err := extractJSON(finished.Data.FinalText, schemaDoc)
 	if err != nil {
-		return harness.Result{}, &harness.Error{Kind: harness.ErrInvalidOutput, Msg: "final message is not valid structured output: " + truncate(finished.Data.FinalText, 300), Meta: meta, Err: err}
+		return harness.Result{}, &harness.Error{Kind: harness.ErrInvalidOutput, Msg: "final message is not valid structured output: " + proc.Truncate(finished.Data.FinalText, 300), Meta: meta, Err: err}
 	}
 	return harness.Result{Output: out, Meta: meta}, nil
 }
@@ -614,22 +588,4 @@ func randomHex(n int) string {
 		panic(err)
 	}
 	return hex.EncodeToString(b)
-}
-
-func tail(stderr []byte) string {
-	s := strings.TrimSpace(string(stderr))
-	if s == "" {
-		return ""
-	}
-	if len(s) > 500 {
-		s = "…" + s[len(s)-500:]
-	}
-	return ": " + s
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

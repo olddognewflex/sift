@@ -1,6 +1,6 @@
 //go:build unix
 
-package kiro
+package proc
 
 import (
 	"os/exec"

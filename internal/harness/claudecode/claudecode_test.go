@@ -3,6 +3,7 @@ package claudecode
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/olddognewflex/sift/internal/harness"
+	"github.com/olddognewflex/sift/internal/harness/internal/proc"
 )
 
 // fakeClaude writes an executable script standing in for the claude CLI.
@@ -157,7 +159,7 @@ sleep 30`)
 	if harness.KindOf(err) != harness.ErrTimeout {
 		t.Fatalf("kind = %s (%v)", harness.KindOf(err), err)
 	}
-	if time.Since(start) > killGrace {
+	if time.Since(start) > proc.KillGrace {
 		t.Fatalf("timeout took %s", time.Since(start))
 	}
 	time.Sleep(3500 * time.Millisecond)
@@ -179,5 +181,26 @@ func TestRunRejectsIncompleteRequest(t *testing.T) {
 	_, err := New("claude").Run(context.Background(), harness.Request{})
 	if harness.KindOf(err) != harness.ErrUnsupported {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// QA Author — adversarial tests
+// Break-It dimensions covered: Error Propagation (a start failure must be
+// distinguishable from request validation, which returns the same kind).
+func TestRunStartFailureIsUnsupported(t *testing.T) {
+	bin := fakeClaude(t, "exit 0")
+	h := New(bin)
+	if err := os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.Run(context.Background(), request(t))
+	if harness.KindOf(err) != harness.ErrUnsupported {
+		t.Fatalf("kind = %s (%v)", harness.KindOf(err), err)
+	}
+	if want := "start " + filepath.Base(bin); !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not name %q", err, want)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("error %v does not wrap fs.ErrNotExist from exec", err)
 	}
 }

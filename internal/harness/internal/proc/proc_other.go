@@ -1,6 +1,6 @@
 //go:build !unix
 
-package claudecode
+package proc
 
 import "os/exec"
 
