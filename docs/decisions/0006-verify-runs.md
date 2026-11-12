@@ -84,25 +84,35 @@ original, and that the original run directory is never changed.
    `ValidationState`. Verify doesn't call `Transition`, `Merge` or `Gate`,
    and none of them change. A deterministic `findings.VerifyGate` decides
    the outcome. Pruv's `additional_evidence` (*added* evidence) is checked
-   against both snapshots.
+   against the new snapshot with the relocation procedure in step 4. An
+   added item is *new code* only when it is verified or relocated in the
+   new snapshot **and** its normalized excerpt has zero matches anywhere in
+   the original snapshot, searched with the same whole-snapshot procedure,
+   normalization and 20-character minimum. A path-only or same-file check
+   against the original is not enough: code moved from another file would
+   look new. One or more matches in the original means the code is not new.
    - `still_present`: Pruv returns `accept`, at least one cited or added
-     item is verified or relocated in the new snapshot, and no added item
-     contradicts it.
+     item is verified or relocated in the new snapshot, and **no** cited or
+     added item contradicts the new snapshot. As in ADR 0003's gate, an
+     accept is not enough when part of the cited evidence no longer holds.
+     Cited code that merely moved is `relocated` (step 4), not a
+     contradiction. A cited item that changed or disappeared makes the
+     outcome `cannot_tell` ("validator says still present, but N cited
+     item(s) changed").
    - `fixed`: Pruv returns `reject`, no added item contradicts the new
      snapshot, and the change is visible mechanically. Either at least one
      cited item now contradicts the new snapshot, or at least one added
-     item is verified in the new snapshot but absent from the original
-     (code added since the audit).
+     item is new code (above).
    - `unverified`: Pruv produced no decision (it failed, timed out or was
      interrupted; `error` is set). The finding was not checked, and the
      remedy is to run verify again. This mirrors `unvalidated` in
      ADR 0003.
    - `cannot_tell`: every other case, where Pruv did check but the result
-     is not actionable. That includes `investigate` and `accept` with no
-     supported evidence. It also includes `reject` when all cited code is
-     unchanged and Pruv cites no new code. That case is a disagreement with
-     the original validation, not a fix, and the reason says so. The remedy
-     is human review.
+     is not actionable. That includes `investigate`, `accept` with no
+     supported evidence, and `accept` with contradicted cited evidence. It
+     also includes `reject` when all cited code is unchanged and Pruv cites
+     no new code. That case is a disagreement with the original validation,
+     not a fix, and the reason says so. The remedy is human review.
 
    As in ADR 0003, Pruv's verdict alone can't produce the outcome a user
    would act on. A `fixed` outcome requires code that changed.
@@ -112,8 +122,10 @@ original, and that the original run directory is never changed.
    are `finding_id`, `original_state`, `severity` and `confidence` (effective
    at the audit), `relocations` (`EvidenceCheck` plus `actual_path`),
    `validator`, `validator_version`, `decision`,
-   `additional_evidence_checks` (new snapshot),
-   `additional_evidence_prior_checks` (original snapshot), `outcome`,
+   `additional_evidence_checks` (new snapshot, with `actual_path`),
+   `additional_evidence_prior_matches` (match count of each added excerpt
+   across the whole original snapshot, persisted so the *new code* test can
+   be audited), `outcome`,
    `outcome_reason`, and `error`. The file is rewritten as each record is
    decided, like `decisions.json`. A selected finding without a record is
    `unverified` ("not checked"). `verification.json` is the canonical
