@@ -150,6 +150,31 @@ func (c CheckStatus) Contradicts() bool {
 	return c == CheckMismatch || c == CheckMissingFile || c == CheckInvalidRange
 }
 
+// VerifyOutcome is the result of re-checking an established finding at a
+// later revision (ADR 0006). It is deliberately not a ValidationState: a
+// finding's validation state describes one snapshot, while an outcome
+// describes the change between two.
+type VerifyOutcome string
+
+const (
+	// OutcomeFixed means the validator says the claim no longer holds and
+	// the change is visible mechanically in the new snapshot.
+	OutcomeFixed VerifyOutcome = "fixed"
+	// OutcomeStillPresent means the validator says the claim still holds
+	// and its evidence is still found in the new snapshot.
+	OutcomeStillPresent VerifyOutcome = "still_present"
+	// OutcomeCannotTell means the finding was checked but the result is not
+	// actionable without human review.
+	OutcomeCannotTell VerifyOutcome = "cannot_tell"
+	// OutcomeUnverified means the validator produced no decision; the
+	// finding was not checked and verify should be run again.
+	OutcomeUnverified VerifyOutcome = "unverified"
+)
+
+func (VerifyOutcome) Enum() []string {
+	return []string{"fixed", "still_present", "cannot_tell", "unverified"}
+}
+
 type Completeness string
 
 const (

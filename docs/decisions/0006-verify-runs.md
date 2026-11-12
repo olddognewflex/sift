@@ -72,6 +72,11 @@ original, and that the original run directory is never changed.
       `mismatch`, `missing_file` or `invalid_range` stands, and the match
       count is noted in `detail`.
 
+   An excerpt under 20 characters is never searched for. If it no longer
+   matches its cited lines but still appears in the cited file, it is
+   `not_verifiable`: it may only have shifted, and it is too short to
+   relocate reliably.
+
    Git rename detection is not used. It needs both revisions as commits,
    which `include` snapshots aren't, and it depends on similarity
    heuristics. The content search is a pure function of the excerpt and

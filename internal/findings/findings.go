@@ -81,12 +81,7 @@ func Check(snapshotDir string, e contract.Evidence) contract.EvidenceCheck {
 		}
 	}
 	if len(matches) > 0 && excerptChars(excerpt) >= minRelocatableChars {
-		best := matches[0]
-		for _, m := range matches[1:] {
-			if abs(m.start-e.StartLine) < abs(best.start-e.StartLine) {
-				best = m
-			}
-		}
+		best := nearest(matches, e.StartLine)
 		return contract.EvidenceCheck{Status: contract.CheckRelocated,
 			Detail:          fmt.Sprintf("excerpt not at cited lines %d-%d but found at %d-%d", e.StartLine, e.EndLine, best.start, best.end),
 			ActualStartLine: best.start, ActualEndLine: best.end}
@@ -203,6 +198,18 @@ func matchAt(f, ex []line) bool {
 		}
 	}
 	return true
+}
+
+// nearest returns the match that starts closest to line; matches must not
+// be empty.
+func nearest(matches []span, line int) span {
+	best := matches[0]
+	for _, m := range matches[1:] {
+		if abs(m.start-line) < abs(best.start-line) {
+			best = m
+		}
+	}
+	return best
 }
 
 func excerptChars(ex []line) int {

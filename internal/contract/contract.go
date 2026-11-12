@@ -21,6 +21,8 @@ const (
 	KindDecisions  = "validation_decisions"
 	KindExecution  = "agent_execution"
 	KindReportMeta = "report_metadata"
+	// KindVerification is a verify run's outcome record (ADR 0006).
+	KindVerification = "verification"
 
 	SchemaVersion = 1
 )
@@ -236,6 +238,46 @@ type DecisionSet struct {
 }
 
 // ---------------------------------------------------------------------------
+// Verification
+
+// Relocation is the check of one evidence item against a later snapshot
+// (ADR 0006 §4). Code may have moved to another file since the audit, so the
+// check carries the path where the excerpt was found as well as the lines.
+type Relocation struct {
+	EvidenceCheck
+	ActualPath string `json:"actual_path,omitempty" desc:"Path where the excerpt was found, when it differs from the cited path."`
+}
+
+// VerificationRecord is the verify outcome for one finding. The finding's
+// audit-time state and evidence are kept in the verify run's findings.json;
+// this record holds what was checked at the new revision and why the
+// outcome follows.
+type VerificationRecord struct {
+	FindingID        string              `json:"finding_id"`
+	OriginalState    ValidationState     `json:"original_state" desc:"Validation state at the audit: confirmed or supported_risk."`
+	Severity         Severity            `json:"severity" desc:"Effective severity at the audit."`
+	Confidence       Confidence          `json:"confidence" desc:"Effective confidence at the audit."`
+	Relocations      []Relocation        `json:"relocations" desc:"One check per cited evidence item, against the new snapshot."`
+	Validator        string              `json:"validator"`
+	ValidatorVersion string              `json:"validator_version"`
+	Decision         *ValidationDecision `json:"decision,omitempty"`
+	AdditionalChecks []Relocation        `json:"additional_evidence_checks,omitempty" desc:"One check per decision.additional_evidence item, against the new snapshot."`
+	// The new-code test needs to be auditable after the fact, so the
+	// original-snapshot match count of each added excerpt is persisted.
+	AdditionalPriorMatches []int         `json:"additional_evidence_prior_matches,omitempty" desc:"Matches of each decision.additional_evidence excerpt across the whole audited snapshot; -1 when it could not be searched."`
+	Outcome                VerifyOutcome `json:"outcome"`
+	OutcomeReason          string        `json:"outcome_reason"`
+	Error                  string        `json:"error,omitempty"`
+}
+
+// VerificationSet is a verify run's canonical outcome record
+// (artifacts/verification.json).
+type VerificationSet struct {
+	Header
+	Records []VerificationRecord `json:"records"`
+}
+
+// ---------------------------------------------------------------------------
 // Execution
 
 // ExecutionResult records one agent execution: who ran, how, and what
@@ -318,6 +360,16 @@ type TaskState struct {
 	Executions []string   `json:"executions,omitempty" desc:"Run-relative paths of execution results."`
 }
 
+// VerifyTarget links a verify run to the audit run it re-checks. The
+// original run is never modified; the link lives only in the verify run.
+type VerifyTarget struct {
+	Run            string   `json:"run" desc:"ID of the audit run being verified."`
+	SourceRevision string   `json:"source_revision" desc:"The original run's repository.source_revision."`
+	SnapshotDigest string   `json:"snapshot_digest" desc:"The original run's repository.snapshot_digest."`
+	Findings       []string `json:"findings" desc:"IDs of the findings verified, sorted and unique."`
+	FindingsSHA256 string   `json:"findings_sha256" desc:"SHA-256 of the original run's artifacts/findings.json."`
+}
+
 type Integrity struct {
 	RepositoryUnchanged bool   `json:"repository_unchanged"`
 	Detail              string `json:"detail"`
@@ -340,6 +392,9 @@ type Manifest struct {
 	Tasks       []TaskState     `json:"tasks"`
 	Integrity   *Integrity      `json:"integrity,omitempty"`
 	Warnings    []string        `json:"warnings,omitempty"`
+	// Verifies links a verify run to the audit run it re-checks (ADR 0006).
+	// It is nil for audit runs.
+	Verifies *VerifyTarget `json:"verifies,omitempty"`
 }
 
 // Task returns the named task state, or nil.
@@ -364,4 +419,8 @@ type ReportMeta struct {
 	Files          []string                `json:"files"`
 	StateCounts    map[ValidationState]int `json:"state_counts"`
 	Limitations    []string                `json:"limitations"`
+	// Verify runs only: the audit run re-checked and the number of
+	// findings per outcome.
+	VerifiesRun   string                `json:"verifies_run,omitempty"`
+	OutcomeCounts map[VerifyOutcome]int `json:"outcome_counts,omitempty"`
 }

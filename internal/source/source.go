@@ -33,6 +33,10 @@ import (
 // dirty policy is refuse.
 var ErrDirty = errors.New("working tree has uncommitted changes")
 
+// ErrMissingCommit is returned by HasCommit when Git ran and found no such
+// commit, as opposed to Git failing to run.
+var ErrMissingCommit = errors.New("commit not found")
+
 // State describes a repository at inspection time.
 type State struct {
 	Root      string
@@ -473,6 +477,30 @@ func sameFileGroups(files []os.FileInfo) [][]int {
 		}
 	}
 	return groups
+}
+
+// HasCommit returns nil if the repository at root contains commit. A verify
+// run must be able to name the audited commit in the repository it
+// snapshots (ADR 0006 §2); without it, the repository is not the one that
+// was audited, or its history was rewritten. Git exiting non-zero yields an
+// error wrapping ErrMissingCommit; Git failing to start or being cancelled
+// yields a different error, so a caller does not blame the repository for
+// a broken environment.
+func HasCommit(ctx context.Context, root, commit string) error {
+	// A leading dash would be parsed as an option, not an object name.
+	if commit == "" || strings.HasPrefix(commit, "-") {
+		return fmt.Errorf("invalid commit %q", commit)
+	}
+	_, err := git(ctx, root, "cat-file", "-e", commit+"^{commit}")
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() == nil && errors.As(err, &exit):
+		return fmt.Errorf("repository %s does not contain commit %s: %w (%w)", root, short(commit), ErrMissingCommit, err)
+	default:
+		return fmt.Errorf("check for commit %s in %s: %w", short(commit), root, err)
+	}
 }
 
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {

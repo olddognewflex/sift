@@ -21,6 +21,12 @@
       },
       "type": "array"
     },
+    "outcome_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
     "partial": {
       "type": "boolean"
     },
@@ -48,6 +54,9 @@
         "type": "integer"
       },
       "type": "object"
+    },
+    "verifies_run": {
+      "type": "string"
     }
   },
   "required": [
