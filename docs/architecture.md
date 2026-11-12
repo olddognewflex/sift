@@ -121,6 +121,11 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   `findings.json`. If validation did not finish, the report derives it the
   same way from the decisions recorded so far, so the run still reports
   correctly.
+- Final states never change after the run. `sift verify` (not implemented
+  yet) re-checks findings at a later revision in a new run linked to the
+  original, and records outcomes there (`fixed`, `still_present`,
+  `cannot_tell`, `unverified`); see
+  [ADR 0006](decisions/0006-verify-runs.md) (proposed).
 
 ## Run status
 
