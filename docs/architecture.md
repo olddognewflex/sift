@@ -11,7 +11,7 @@ sift audit <path>
   ├─ probe harness ──────────────── fail before creating a run if unusable
   ├─ inspect repository (git) ───── commit, branch, porcelain status
   ├─ apply dirty policy ─────────── refuse | head | include      (ADR 0001)
-  ├─ estimate cost ──────────────── internal/cost; Preflight may refuse (ADR 0007)
+  ├─ estimate cost ──────────────── internal/cost; over budget: confirm or refuse (ADR 0007)
   ├─ create run dir (outside repo), archive agent definitions
   ├─ export read-only snapshot ──── <run>/source, digest, diff
   │
@@ -41,7 +41,7 @@ each decision is saved as soon as it is made. The report always runs.
 | Package | Responsibility |
 |---|---|
 | `cmd/sift` | Entry point; signal handling (first SIGINT cancels gracefully) |
-| `internal/cli` | Cobra commands, exit codes, human/JSON output |
+| `internal/cli` | Cobra commands, exit codes, human/JSON output, the over-budget spend gate |
 | `internal/config` | YAML config: defaults, strict parsing, validation, `sift init` template |
 | `internal/contract` | Versioned artifact types, strict decoding, validation. The single source of truth |
 | `internal/schema` | JSON Schema generation from contract types (for harness and `schemas/`), and validation for harnesses without native schema support |
@@ -144,6 +144,7 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
 | Failure | Handling |
 |---|---|
 | Harness missing, or missing a required flag | `Probe` fails; no run is created |
+| Cost estimate over `cost.budget_usd` | Confirmed at a prompt (stdin and stderr both terminals) or with `--yes`; otherwise exit 1 and no run is created (ADR 0007) |
 | Agent process failure | Retried (`agents.retries`, default 1); then the task fails |
 | Invalid structured output | Retried with the validation error appended to the prompt; then the task fails |
 | Timeout, budget exhausted, cancellation | Not retried; task fails or is interrupted |
@@ -193,7 +194,9 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   and reviewer cost grows with the snapshot. Before a run is created, Sift
   estimates its cost from configured rates (`internal/cost`, ADR 0007) and
   records the estimate and the actual reported spend in the manifest's
-  `cost` field. The rates are guesses until calibrated against those
+  `cost` field. The CLI prints the estimate and, when its high end exceeds
+  `cost.budget_usd`, asks when stdin and stderr are both terminals and
+  otherwise refuses, unless `--yes` is given. The rates are guesses until calibrated against those
   records, and retries are not modelled. The number of Pruv executions is
   bounded by `max_findings_per_reviewer`; each execution by
   `agents.max_budget_usd` (not enforceable on Kiro, ADR 0005).

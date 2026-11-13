@@ -1,7 +1,7 @@
 ---
 name: sift-audit
 description: Run a Sift audit of a Git repository (architecture and correctness review with independently validated, evidence-backed findings) and summarize the results. Use when the user asks to audit, review, or "sift" a repository or the current project.
-argument-hint: "[path] [--harness claude-code|kiro] [--model MODEL] [--dirty refuse|head|include]"
+argument-hint: "[path] [--harness claude-code|kiro] [--model MODEL] [--dirty refuse|head|include] [--yes]"
 allowed-tools: Bash(sift audit:*), Bash(sift findings:*), Bash(sift status:*), Bash(sift report:*), Bash(git status:*), Bash(git -C:*), Bash(command -v sift), Read
 ---
 
@@ -62,8 +62,16 @@ Read the command output. It ends with `Run:`, `Status:`, and `Reports:`.
 |---|---|---|
 | 0 | completed | Summarize the results |
 | 2 | partial: some stages failed | Summarize, and say plainly that results are incomplete; run `sift status --json --run <id>` and name the failed stages |
-| 130 | interrupted | Partial results were saved; say so |
-| 1 | failed or could not start | Show the error. Common causes: dirty tree, harness not installed or not logged in (`kiro-cli login`), unknown model name |
+| 130 | interrupted | Partial results were saved; say so. If it says "before a run was created", nothing ran and no results exist |
+| 1 | failed or could not start | Show the error. Common causes: dirty tree, harness not installed or not logged in (`kiro-cli login`), unknown model name, cost over budget (below) |
+
+If stderr says the estimate "exceeds the run budget", Sift refused before
+running anything, because it never spends past `cost.budget_usd` without a
+confirmation it can't ask for here. Show the user the `cost estimate` lines
+it printed and ask (with AskUserQuestion when available) whether to proceed.
+Only if they explicitly agree, rerun the same command with `--yes` added, as
+in step 3. Never add `--yes`, raise `cost.budget_usd`, or edit `sift.yaml`
+on your own.
 
 Never present a partial or failed audit as a clean result.
 

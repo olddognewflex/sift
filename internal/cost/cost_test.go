@@ -255,3 +255,19 @@ func TestLines(t *testing.T) {
 		})
 	}
 }
+
+func TestUSDRange(t *testing.T) {
+	for _, tc := range []struct {
+		low, high float64
+		want      string
+	}{
+		{4.58, 6.98, "$4.58 – $6.98"},
+		{1.5, 1.5, "$1.50"},
+		{1.501, 1.499, "$1.50"},
+		{0, 0, "$0.00"},
+	} {
+		if got := USDRange(tc.low, tc.high); got != tc.want {
+			t.Errorf("USDRange(%v, %v) = %q, want %q", tc.low, tc.high, got, tc.want)
+		}
+	}
+}
