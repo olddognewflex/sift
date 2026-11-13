@@ -1,0 +1,22 @@
+version: 1
+fixture: selftest
+entries:
+  - id: S-D1
+    kind: defect
+    category: correctness
+    title: Get reads the counts map without holding the mutex
+    locations: [{path: counter/counter.go, start_line: 28, end_line: 30}]
+    anchor: "return c.counts[key]"
+    notes: >-
+      Add writes the map under c.mu but Get reads it unlocked, so a
+      concurrent Add and Get is a data race on the map (a fatal runtime
+      error), contradicting the type's concurrency guarantee.
+  - id: S-X1
+    kind: decoy
+    category: correctness
+    title: Top slices past the end of keys when n exceeds the key count
+    locations: [{path: counter/counter.go, start_line: 53, end_line: 53}]
+    anchor: "return keys[:n]"
+    notes: >-
+      n is clamped to len(c.counts) at the top of Top, and keys holds
+      exactly len(c.counts) entries, so keys[:n] is always in range.
