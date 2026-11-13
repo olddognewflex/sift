@@ -272,6 +272,42 @@
       "format": "date-time",
       "type": "string"
     },
+    "verifies": {
+      "additionalProperties": false,
+      "properties": {
+        "findings": {
+          "description": "IDs of the findings verified, sorted and unique.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "findings_sha256": {
+          "description": "SHA-256 of the original run's artifacts/findings.json.",
+          "type": "string"
+        },
+        "run": {
+          "description": "ID of the audit run being verified.",
+          "type": "string"
+        },
+        "snapshot_digest": {
+          "description": "The original run's repository.snapshot_digest.",
+          "type": "string"
+        },
+        "source_revision": {
+          "description": "The original run's repository.source_revision.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "source_revision",
+        "snapshot_digest",
+        "findings",
+        "findings_sha256"
+      ],
+      "type": "object"
+    },
     "warnings": {
       "items": {
         "type": "string"

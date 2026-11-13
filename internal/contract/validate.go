@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -276,6 +278,101 @@ func (s DecisionSet) Validate() error {
 	return p.err()
 }
 
+func (r Relocation) validate(p *problems, field string) {
+	checkEnum(p, field+".status", r.Status)
+	if r.ActualPath != "" && !ValidRelPath(r.ActualPath) {
+		p.add(field+".actual_path", "%q is not a clean repository-relative path", r.ActualPath)
+	}
+}
+
+func (r VerificationRecord) validate(p *problems, f string) {
+	p.required(f+".finding_id", r.FindingID)
+	p.required(f+".validator", r.Validator)
+	p.required(f+".validator_version", r.ValidatorVersion)
+	// Only established findings are verified (ADR 0006 §8).
+	if r.OriginalState != StateConfirmed && r.OriginalState != StateSupportedRisk {
+		p.add(f+".original_state", "%q is not confirmed or supported_risk", string(r.OriginalState))
+	}
+	checkEnum(p, f+".severity", r.Severity)
+	checkEnum(p, f+".confidence", r.Confidence)
+	checkEnum(p, f+".outcome", r.Outcome)
+	p.required(f+".outcome_reason", r.OutcomeReason)
+	for i, c := range r.Relocations {
+		c.validate(p, fmt.Sprintf("%s.relocations[%d]", f, i))
+	}
+	if r.Outcome == OutcomeUnverified {
+		// Unverified means no decision was produced; the error says why.
+		p.required(f+".error", r.Error)
+		if r.Decision != nil {
+			p.add(f+".decision", "not allowed when outcome is unverified")
+		}
+	}
+	if r.Decision == nil {
+		// The only decided outcome without a validator decision is the
+		// identical-snapshot short circuit, where no agent runs.
+		if r.Outcome != OutcomeUnverified && r.Outcome != OutcomeStillPresent {
+			p.add(f+".decision", "required when outcome is %s", r.Outcome)
+		}
+		if r.Outcome == OutcomeStillPresent && r.Error != "" {
+			p.add(f+".error", "not allowed on a still_present outcome without a decision")
+		}
+		if len(r.AdditionalChecks) > 0 || len(r.AdditionalPriorMatches) > 0 {
+			p.add(f, "additional evidence checks and prior matches need a decision")
+		}
+		return
+	}
+	if err := r.Decision.Validate(); err != nil {
+		p.add(f+".decision", "%v", err)
+	}
+	n := len(r.Decision.AdditionalEvidence)
+	if len(r.AdditionalChecks) != n {
+		p.add(f+".additional_evidence_checks", "have %d checks for %d additional evidence items", len(r.AdditionalChecks), n)
+	}
+	if len(r.AdditionalPriorMatches) != n {
+		p.add(f+".additional_evidence_prior_matches", "have %d counts for %d additional evidence items", len(r.AdditionalPriorMatches), n)
+	}
+	for i, c := range r.AdditionalChecks {
+		c.validate(p, fmt.Sprintf("%s.additional_evidence_checks[%d]", f, i))
+	}
+	for i, m := range r.AdditionalPriorMatches {
+		if m < -1 {
+			p.add(fmt.Sprintf("%s.additional_evidence_prior_matches[%d]", f, i), "%d is not a match count or -1", m)
+		}
+	}
+}
+
+func (s VerificationSet) Validate() error {
+	var p problems
+	s.Header.validate(&p, KindVerification)
+	seen := map[string]bool{}
+	for i, r := range s.Records {
+		f := fmt.Sprintf("records[%d]", i)
+		r.validate(&p, f)
+		if seen[r.FindingID] {
+			p.add(f+".finding_id", "duplicate %q", r.FindingID)
+		}
+		seen[r.FindingID] = true
+	}
+	return p.err()
+}
+
+func (v VerifyTarget) validate(p *problems) {
+	p.required("verifies.run", v.Run)
+	p.required("verifies.source_revision", v.SourceRevision)
+	p.required("verifies.snapshot_digest", v.SnapshotDigest)
+	p.required("verifies.findings_sha256", v.FindingsSHA256)
+	if len(v.Findings) == 0 {
+		p.add("verifies.findings", "at least one finding is required")
+	}
+	for i, id := range v.Findings {
+		f := fmt.Sprintf("verifies.findings[%d]", i)
+		p.required(f, id)
+		if i > 0 && id <= v.Findings[i-1] {
+			p.add(f, "%q is not after %q; findings must be sorted and unique", id, v.Findings[i-1])
+		}
+	}
+}
+
 func (e ExecutionResult) Validate() error {
 	var p problems
 	e.Header.validate(&p, KindExecution)
@@ -313,6 +410,9 @@ func (m Manifest) Validate() error {
 			}
 		}
 	}
+	if m.Verifies != nil {
+		m.Verifies.validate(&p)
+	}
 	return p.err()
 }
 
@@ -322,6 +422,9 @@ func (r ReportMeta) Validate() error {
 	checkEnum(&p, "run_status", r.RunStatus)
 	if len(r.Files) == 0 {
 		p.add("files", "at least one report file is required")
+	}
+	for _, o := range slices.Sorted(maps.Keys(r.OutcomeCounts)) {
+		checkEnum(&p, "outcome_counts", o)
 	}
 	return p.err()
 }

@@ -74,6 +74,7 @@ var published = map[string]func() ([]byte, error){
 	"validation-decisions.schema.json": func() ([]byte, error) { return schema.For[contract.DecisionSet]("Sift validation decisions") },
 	"agent-execution.schema.json":      func() ([]byte, error) { return schema.For[contract.ExecutionResult]("Sift agent execution result") },
 	"report-metadata.schema.json":      func() ([]byte, error) { return schema.For[contract.ReportMeta]("Sift report metadata") },
+	"verification.schema.json":         func() ([]byte, error) { return schema.For[contract.VerificationSet]("Sift verification outcomes") },
 }
 
 // TestPublishedSchemasUpToDate keeps schemas/ in sync with the Go types.

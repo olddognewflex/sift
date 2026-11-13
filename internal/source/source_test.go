@@ -347,3 +347,48 @@ func TestExportIncludeSkipsHardLinkedPaths(t *testing.T) {
 		t.Errorf("skipped = %v, files = %d", snap.Skipped, snap.Files)
 	}
 }
+
+func TestHasCommit(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"a.go": "package a\n"})
+	head := strings.TrimSpace(testutil.Git(t, repo, "rev-parse", "HEAD"))
+	blob := strings.TrimSpace(testutil.Git(t, repo, "rev-parse", "HEAD:a.go"))
+	foreign := testutil.GitRepo(t, map[string]string{"b.go": "package b\n"})
+	foreignHead := strings.TrimSpace(testutil.Git(t, foreign, "rev-parse", "HEAD"))
+	cases := []struct {
+		name, commit string
+		ok           bool
+	}{
+		{"head", head, true},
+		{"abbreviated head", head[:12], true},
+		{"unknown sha", "0123456789abcdef0123456789abcdef01234567", false},
+		{"commit of another repository", foreignHead, false},
+		{"blob, not a commit", blob, false},
+		{"empty", "", false},
+		{"option-like", "--all", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := HasCommit(ctx, repo, c.commit)
+			if (err == nil) != c.ok {
+				t.Fatalf("HasCommit(%q) = %v, want ok=%v", c.commit, err, c.ok)
+			}
+			if err != nil && c.commit != "" && !strings.HasPrefix(c.commit, "-") && !errors.Is(err, ErrMissingCommit) {
+				t.Fatalf("HasCommit(%q) = %v, want ErrMissingCommit", c.commit, err)
+			}
+		})
+	}
+
+	// Failures to run Git are not reported as a missing commit.
+	if err := HasCommit(ctx, t.TempDir(), head); err == nil || errors.Is(err, ErrMissingCommit) {
+		t.Errorf("not a repository: %v, want a non-ErrMissingCommit error", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := HasCommit(cancelled, repo, head); err == nil || errors.Is(err, ErrMissingCommit) {
+		t.Errorf("cancelled context: %v, want a non-ErrMissingCommit error", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if err := HasCommit(ctx, repo, head); err == nil || errors.Is(err, ErrMissingCommit) {
+		t.Errorf("git not on PATH: %v, want a non-ErrMissingCommit error", err)
+	}
+}

@@ -219,3 +219,242 @@ func TestReviewerRegistry(t *testing.T) {
 		t.Error("an unregistered category must have no prefix")
 	}
 }
+
+func validDecision(v Verdict, c Classification) *ValidationDecision {
+	return &ValidationDecision{Verdict: v, Classification: c, EvidenceAssessment: "a", ContradictoryEvidence: "b",
+		TriggerAssessment: "c", ImpactAssessment: "d", RemediationAssessment: "e", Rationale: "f"}
+}
+
+func validVerificationSet() VerificationSet {
+	dec := validDecision(VerdictReject, "")
+	dec.AdditionalEvidence = []Evidence{{Kind: EvidenceSource, Description: "the guard", Path: "a/c.go", StartLine: 3, EndLine: 3, Excerpt: "if len(xs) == 0 {"}}
+	return VerificationSet{Header: NewHeader(KindVerification, "run"), Records: []VerificationRecord{{
+		FindingID: "CORR-001", OriginalState: StateConfirmed, Severity: SeverityHigh, Confidence: ConfidenceMedium,
+		Relocations: []Relocation{{
+			EvidenceCheck: EvidenceCheck{Status: CheckRelocated, Detail: "moved", ActualStartLine: 4, ActualEndLine: 4},
+			ActualPath:    "a/moved.go",
+		}},
+		Validator: "pruv", ValidatorVersion: "3", Decision: dec,
+		AdditionalChecks:       []Relocation{{EvidenceCheck: EvidenceCheck{Status: CheckVerified, Detail: "ok"}}},
+		AdditionalPriorMatches: []int{0},
+		Outcome:                OutcomeFixed, OutcomeReason: "validator says fixed",
+	}}}
+}
+
+func TestVerificationSetRoundTrip(t *testing.T) {
+	set := validVerificationSet()
+	data, err := json.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The embedded check is flattened next to actual_path, and an unset
+	// actual_path is omitted.
+	for _, want := range []string{`"status":"relocated","detail":"moved","actual_start_line":4,"actual_end_line":4,"actual_path":"a/moved.go"`, `"additional_evidence_prior_matches":[0]`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("encoding lacks %s: %s", want, data)
+		}
+	}
+	if strings.Contains(string(data), "EvidenceCheck") || strings.Count(string(data), `"actual_path"`) != 1 {
+		t.Fatalf("unexpected encoding: %s", data)
+	}
+	var back VerificationSet
+	if err := Decode(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	r := back.Records[0]
+	if r.Outcome != OutcomeFixed || r.Relocations[0].ActualPath != "a/moved.go" || r.Relocations[0].ActualStartLine != 4 ||
+		r.AdditionalPriorMatches[0] != 0 || r.Decision == nil || len(r.Decision.AdditionalEvidence) != 1 {
+		t.Fatalf("round trip lost data: %+v", r)
+	}
+	unknown := strings.Replace(string(data), `"outcome":`, `"surprise":1,"outcome":`, 1)
+	if err := Decode([]byte(unknown), &back); err == nil {
+		t.Error("strict decoding must reject unknown fields")
+	}
+}
+
+func TestVerificationSetValidation(t *testing.T) {
+	if err := validVerificationSet().Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Records that must stay valid.
+	valid := map[string]func(*VerificationRecord){
+		"supported risk": func(r *VerificationRecord) { r.OriginalState = StateSupportedRisk },
+		"unverified with error": func(r *VerificationRecord) {
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+			r.Outcome, r.Error = OutcomeUnverified, "timed out"
+		},
+		"identical snapshot still present": func(r *VerificationRecord) {
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+			r.Outcome, r.OutcomeReason = OutcomeStillPresent, "snapshot identical to the audited one"
+		},
+		"decision without additional evidence": func(r *VerificationRecord) {
+			r.Decision.AdditionalEvidence, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+			r.Outcome = OutcomeCannotTell
+		},
+		"unsearchable prior match": func(r *VerificationRecord) { r.AdditionalPriorMatches = []int{-1} },
+	}
+	for name, mutate := range valid {
+		t.Run(name, func(t *testing.T) {
+			s := validVerificationSet()
+			mutate(&s.Records[0])
+			if err := s.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	invalid := map[string]func(*VerificationSet){
+		"wrong kind":           func(s *VerificationSet) { s.Kind = KindDecisions },
+		"no finding id":        func(s *VerificationSet) { s.Records[0].FindingID = "" },
+		"no validator":         func(s *VerificationSet) { s.Records[0].Validator = "" },
+		"no validator version": func(s *VerificationSet) { s.Records[0].ValidatorVersion = " " },
+		"unverified without validator": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+			r.Outcome, r.Error, r.Validator = OutcomeUnverified, "timed out", ""
+		},
+		"duplicate finding":     func(s *VerificationSet) { s.Records = append(s.Records, s.Records[0]) },
+		"rejected original":     func(s *VerificationSet) { s.Records[0].OriginalState = StateRejected },
+		"needs investigation":   func(s *VerificationSet) { s.Records[0].OriginalState = StateNeedsInvestigation },
+		"candidate original":    func(s *VerificationSet) { s.Records[0].OriginalState = StateCandidate },
+		"bad severity":          func(s *VerificationSet) { s.Records[0].Severity = "huge" },
+		"bad confidence":        func(s *VerificationSet) { s.Records[0].Confidence = "" },
+		"bad outcome":           func(s *VerificationSet) { s.Records[0].Outcome = "gone" },
+		"empty outcome":         func(s *VerificationSet) { s.Records[0].Outcome = "" },
+		"no outcome reason":     func(s *VerificationSet) { s.Records[0].OutcomeReason = " " },
+		"bad relocation status": func(s *VerificationSet) { s.Records[0].Relocations[0].Status = "moved" },
+		"escaping actual path":  func(s *VerificationSet) { s.Records[0].Relocations[0].ActualPath = "../x.go" },
+		"unverified without error": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches, r.Outcome = nil, nil, nil, OutcomeUnverified
+		},
+		"unverified with decision": func(s *VerificationSet) {
+			s.Records[0].Outcome, s.Records[0].Error = OutcomeUnverified, "boom"
+		},
+		"fixed without decision": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+		},
+		"cannot tell without decision": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches, r.Outcome = nil, nil, nil, OutcomeCannotTell
+		},
+		"identical snapshot with error": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+			r.Outcome, r.Error = OutcomeStillPresent, "boom"
+		},
+		"additional checks without decision": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalPriorMatches, r.Outcome, r.Error = nil, nil, OutcomeUnverified, "boom"
+		},
+		"prior matches without decision": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.Outcome = nil, nil, OutcomeStillPresent
+		},
+		"invalid decision":         func(s *VerificationSet) { s.Records[0].Decision.Rationale = "" },
+		"missing additional check": func(s *VerificationSet) { s.Records[0].AdditionalChecks = nil },
+		"extra additional check": func(s *VerificationSet) {
+			s.Records[0].AdditionalChecks = append(s.Records[0].AdditionalChecks, Relocation{EvidenceCheck: EvidenceCheck{Status: CheckVerified}})
+		},
+		"missing prior match":        func(s *VerificationSet) { s.Records[0].AdditionalPriorMatches = nil },
+		"extra prior match":          func(s *VerificationSet) { s.Records[0].AdditionalPriorMatches = []int{0, 1} },
+		"bad additional status":      func(s *VerificationSet) { s.Records[0].AdditionalChecks[0].Status = "" },
+		"prior match below sentinel": func(s *VerificationSet) { s.Records[0].AdditionalPriorMatches = []int{-2} },
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			s := validVerificationSet()
+			mutate(&s)
+			if err := s.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func validManifest() Manifest {
+	return Manifest{Header: NewHeader(KindManifest, "r"), Status: RunRunning,
+		Repository: Repository{Path: "/r", Commit: "c", SourceRevision: "c", DirtyPolicy: DirtyRefuse},
+		Config:     json.RawMessage(`{}`), CreatedAt: time.Unix(0, 0).UTC(), UpdatedAt: time.Unix(0, 0).UTC()}
+}
+
+func TestManifestVerifies(t *testing.T) {
+	// Audit manifests have no verifies field and must keep decoding.
+	audit, err := json.Marshal(validManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(audit), "verifies") {
+		t.Fatalf("audit manifest encodes verifies: %s", audit)
+	}
+	var m Manifest
+	if err := Decode(audit, &m); err != nil || m.Verifies != nil {
+		t.Fatalf("audit manifest: %v, verifies = %+v", err, m.Verifies)
+	}
+
+	target := func() *VerifyTarget {
+		return &VerifyTarget{Run: "20261027T153012Z-a1b2c3", SourceRevision: "c", SnapshotDigest: "d",
+			Findings: []string{"ARCH-002", "CORR-001"}, FindingsSHA256: "s"}
+	}
+	v := validManifest()
+	v.Verifies = target()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Manifest
+	if err := Decode(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Verifies == nil || back.Verifies.Run != v.Verifies.Run || !slices.Equal(back.Verifies.Findings, v.Verifies.Findings) {
+		t.Fatalf("round trip lost verifies: %+v", back.Verifies)
+	}
+
+	invalid := map[string]func(*VerifyTarget){
+		"no run":      func(v *VerifyTarget) { v.Run = "" },
+		"no revision": func(v *VerifyTarget) { v.SourceRevision = "" },
+		"no digest":   func(v *VerifyTarget) { v.SnapshotDigest = "" },
+		"no sha256":   func(v *VerifyTarget) { v.FindingsSHA256 = " " },
+		"no findings": func(v *VerifyTarget) { v.Findings = nil },
+		"unsorted":    func(v *VerifyTarget) { v.Findings = []string{"CORR-001", "ARCH-002"} },
+		"duplicate":   func(v *VerifyTarget) { v.Findings = []string{"ARCH-002", "ARCH-002"} },
+		"empty id":    func(v *VerifyTarget) { v.Findings = []string{"", "ARCH-002"} },
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			m := validManifest()
+			m.Verifies = target()
+			mutate(m.Verifies)
+			if err := m.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestReportMetaOutcomeCounts(t *testing.T) {
+	r := ReportMeta{Header: NewHeader(KindReportMeta, "r"), RunStatus: RunCompleted, Files: []string{"verification.md"},
+		VerifiesRun: "orig", OutcomeCounts: map[VerifyOutcome]int{OutcomeFixed: 1, OutcomeStillPresent: 2}}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back ReportMeta
+	if err := Decode(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.VerifiesRun != "orig" || back.OutcomeCounts[OutcomeStillPresent] != 2 {
+		t.Fatalf("round trip lost data: %+v", back)
+	}
+	audit, err := json.Marshal(ReportMeta{Header: NewHeader(KindReportMeta, "r"), RunStatus: RunCompleted, Files: []string{"a.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(audit), "verifies_run") || strings.Contains(string(audit), "outcome_counts") {
+		t.Fatalf("audit report metadata encodes verify fields: %s", audit)
+	}
+	r.OutcomeCounts["gone"] = 1
+	if r.Validate() == nil {
+		t.Error("an unknown outcome must be invalid")
+	}
+}

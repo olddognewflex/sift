@@ -35,6 +35,9 @@ const (
 	AgentsDir       = "agents"
 	ExecutionsDir   = "executions"
 	ReviewFilePattn = "artifacts/review-%s.json"
+
+	// VerificationFile holds a verify run's outcomes (ADR 0006).
+	VerificationFile = "artifacts/verification.json"
 )
 
 // ErrNoRuns is returned by Latest when the runs directory has no runs.
