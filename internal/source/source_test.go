@@ -392,3 +392,114 @@ func TestHasCommit(t *testing.T) {
 		t.Errorf("git not on PATH: %v, want a non-ErrMissingCommit error", err)
 	}
 }
+
+func TestCountFilesMatchesExport(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"a.go": "a\n", "dir/b.go": "b\n", "dir/sub/c.go": "c\n"})
+	if err := os.Symlink("a.go", filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, repo, "add", "link")
+	testutil.Git(t, repo, "commit", "-q", "-m", "link")
+	st, err := Inspect(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := CountFiles(ctx, st, contract.DirtyRefuse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Export(ctx, st, contract.DirtyRefuse, filepath.Join(t.TempDir(), "snap"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != snap.Files || n != 3 {
+		t.Errorf("CountFiles = %d, Export files = %d, want 3 (symlink excluded)", n, snap.Files)
+	}
+}
+
+func TestCountFilesFollowsDirtyPolicy(t *testing.T) {
+	// dirtyRepo: a.go modified, b.go kept, gone.go deleted, new.go untracked.
+	_, st := dirtyRepo(t)
+	for _, tc := range []struct {
+		policy contract.DirtyPolicy
+		want   int
+	}{
+		{contract.DirtyHead, 3},    // a.go, b.go, gone.go as committed
+		{contract.DirtyInclude, 3}, // a.go, b.go, new.go on disk
+	} {
+		n, err := CountFiles(ctx, st, tc.policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := Export(ctx, st, tc.policy, filepath.Join(t.TempDir(), "snap"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != tc.want || n != snap.Files {
+			t.Errorf("%s: CountFiles = %d, Export files = %d, want %d", tc.policy, n, snap.Files, tc.want)
+		}
+	}
+	if _, err := CountFiles(ctx, st, contract.DirtyRefuse); !errors.Is(err, ErrDirty) {
+		t.Errorf("refuse on a dirty tree: err = %v", err)
+	}
+}
+
+func TestCountFilesIncludeCountsUntracked(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"a.go": "a\n"})
+	testutil.WriteFiles(t, repo, map[string]string{"one.go": "1\n", "dir/two.go": "2\n", ".gitignore": "ignored.go\n", "ignored.go": "x\n"})
+	if err := os.Symlink("a.go", filepath.Join(repo, "untracked-link")); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Inspect(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := CountFiles(ctx, st, contract.DirtyHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	include, err := CountFiles(ctx, st, contract.DirtyInclude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// include: a.go, one.go, dir/two.go, .gitignore; not ignored.go or the symlink.
+	if head != 1 || include != 4 {
+		t.Errorf("head = %d, include = %d, want 1 and 4", head, include)
+	}
+}
+
+func TestCountFilesSkipsSubmodulesLikeExport(t *testing.T) {
+	repo := testutil.GitRepo(t, map[string]string{"a.go": "a\n"})
+	// A gitlink entry is a submodule as far as ls-tree and ls-files are
+	// concerned; no real submodule repository is needed.
+	head := strings.TrimSpace(testutil.Git(t, repo, "rev-parse", "HEAD"))
+	testutil.Git(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+head+",sub")
+	testutil.Git(t, repo, "commit", "-q", "-m", "submodule")
+	if err := os.Mkdir(filepath.Join(repo, "sub"), 0o755); err != nil { // unpopulated submodule
+		t.Fatal(err)
+	}
+	testutil.WriteFiles(t, repo, map[string]string{"new.go": "untracked\n"}) // dirty, so include reads the working tree
+	st, err := Inspect(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		policy contract.DirtyPolicy
+		want   int
+	}{
+		{contract.DirtyHead, 1},    // a.go
+		{contract.DirtyInclude, 2}, // a.go, new.go
+	} {
+		n, err := CountFiles(ctx, st, tc.policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := Export(ctx, st, tc.policy, filepath.Join(t.TempDir(), "snap"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != tc.want || n != snap.Files || !strings.Contains(strings.Join(snap.Skipped, "|"), "sub (submodule)") {
+			t.Errorf("%s: CountFiles = %d, Export files = %d (skipped %v), want %d", tc.policy, n, snap.Files, snap.Skipped, tc.want)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,6 +36,7 @@ type Config struct {
 	Harness HarnessConfig `yaml:"harness" json:"harness"`
 	Audit   AuditConfig   `yaml:"audit" json:"audit"`
 	Agents  AgentsConfig  `yaml:"agents" json:"agents"`
+	Cost    CostConfig    `yaml:"cost" json:"cost"`
 }
 
 type StorageConfig struct {
@@ -73,6 +75,25 @@ type AgentOverride struct {
 	MaxBudgetUSD float64  `yaml:"max_budget_usd" json:"max_budget_usd,omitempty"`
 }
 
+// CostConfig drives the pre-run cost estimate (internal/cost) and the
+// whole-run budget it is checked against.
+type CostConfig struct {
+	// BudgetUSD is the whole-run budget; 0 disables the check. It is
+	// separate from agents.max_budget_usd, which caps one execution.
+	BudgetUSD float64 `yaml:"budget_usd" json:"budget_usd"`
+	// ExpectedFindingsPerReviewer sets the low end of the estimate; the high
+	// end assumes audit.max_findings_per_reviewer.
+	ExpectedFindingsPerReviewer int       `yaml:"expected_findings_per_reviewer" json:"expected_findings_per_reviewer"`
+	Rates                       CostRates `yaml:"rates" json:"rates"`
+}
+
+// CostRates are the per-unit prices the estimate multiplies out.
+type CostRates struct {
+	DiscoveryUSD  float64 `yaml:"discovery_usd" json:"discovery_usd"`
+	FileReviewUSD float64 `yaml:"file_review_usd" json:"file_review_usd"`
+	PruvCallUSD   float64 `yaml:"pruv_call_usd" json:"pruv_call_usd"`
+}
+
 // Duration is a time.Duration written as a Go duration string ("15m").
 type Duration time.Duration
 
@@ -106,6 +127,11 @@ func Default() Config {
 			Timeout:      Duration(20 * time.Minute),
 			MaxBudgetUSD: 3,
 			Retries:      1,
+		},
+		Cost: CostConfig{
+			BudgetUSD:                   15,
+			ExpectedFindingsPerReviewer: 4,
+			Rates:                       CostRates{DiscoveryUSD: 0.50, FileReviewUSD: 0.02, PruvCallUSD: 0.30},
 		},
 	}
 }
@@ -180,19 +206,33 @@ func (c Config) Validate() error {
 	if c.Agents.Timeout <= 0 {
 		bad("agents.timeout: must be positive")
 	}
-	if c.Agents.MaxBudgetUSD <= 0 {
-		bad("agents.max_budget_usd: must be positive")
+	if !(c.Agents.MaxBudgetUSD > 0) || math.IsInf(c.Agents.MaxBudgetUSD, 0) {
+		bad("agents.max_budget_usd: must be a positive finite number")
 	}
 	if c.Agents.Retries < 0 || c.Agents.Retries > 3 {
 		bad("agents.retries: must be between 0 and 3")
 	}
 	for name, o := range c.Agents.Overrides {
-		if o.Timeout < 0 || o.MaxBudgetUSD < 0 {
-			bad("agents.overrides.%s: timeout and max_budget_usd must not be negative", name)
+		if o.Timeout < 0 || !nonNegative(o.MaxBudgetUSD) {
+			bad("agents.overrides.%s: timeout and max_budget_usd must not be negative, and max_budget_usd must be finite", name)
 		}
+	}
+	if !nonNegative(c.Cost.BudgetUSD) {
+		bad("cost.budget_usd: must be a non-negative finite number (0 disables the budget)")
+	}
+	if n := c.Cost.ExpectedFindingsPerReviewer; n < 0 || n > 50 {
+		bad("cost.expected_findings_per_reviewer: must be between 0 and 50")
+	}
+	r := c.Cost.Rates
+	if !nonNegative(r.DiscoveryUSD) || !nonNegative(r.FileReviewUSD) || !nonNegative(r.PruvCallUSD) {
+		bad("cost.rates: rates must be non-negative finite numbers")
 	}
 	return errors.Join(errs...)
 }
+
+// nonNegative reports whether v is a finite number >= 0 (YAML accepts .nan
+// and .inf, which would poison every comparison made with them).
+func nonNegative(v float64) bool { return v >= 0 && !math.IsInf(v, 0) }
 
 // Limits returns the effective model, timeout, and budget for an agent.
 func (c Config) Limits(agent string) (model string, timeout time.Duration, budget float64) {
@@ -270,8 +310,9 @@ agents:
   dir: ""
   # Wall-clock limit for one agent execution.
   timeout: 20m
-  # Spending limit for one agent execution, enforced by the harness.
-  # The kiro harness cannot enforce it; there, only the timeout bounds spend.
+  # Spending limit for one agent execution, enforced by the harness. It
+  # does not cap the whole run; see cost.budget_usd for that. The kiro
+  # harness cannot enforce it; there, only the timeout bounds spend.
   max_budget_usd: 3
   # Extra attempts after a process failure or invalid structured output.
   # Timeouts, cancellations, and budget exhaustion are not retried.
@@ -280,4 +321,25 @@ agents:
   # overrides:
   #   pruv: {model: opus, timeout: 10m}
   overrides: {}
+
+cost:
+  # Whole-run budget in USD for the cost estimate Sift makes before any
+  # agent runs. A run whose high estimate exceeds it needs confirmation
+  # (asked on a terminal, --yes otherwise). 0 disables the check. This is
+  # separate from agents.max_budget_usd, which caps one agent execution.
+  # The default never stops a claude-code run at default settings, whose
+  # per-execution caps bound the estimate at $11.30.
+  budget_usd: 15
+  # Findings each reviewer is expected to report: the low end of the
+  # estimate. The high end assumes audit.max_findings_per_reviewer.
+  expected_findings_per_reviewer: 4
+  # Per-unit rates the estimate multiplies out. They are guesses until
+  # calibrated: compare cost.estimate with cost.actual in run manifests.
+  rates:
+    # One discovery execution.
+    discovery_usd: 0.50
+    # One reviewer execution, per snapshot file.
+    file_review_usd: 0.02
+    # One Pruv execution (one per candidate finding).
+    pruv_call_usd: 0.30
 `

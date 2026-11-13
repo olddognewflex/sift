@@ -33,6 +33,152 @@
       "type": "array"
     },
     "config": {},
+    "cost": {
+      "additionalProperties": false,
+      "properties": {
+        "actual": {
+          "additionalProperties": false,
+          "properties": {
+            "candidates": {
+              "description": "Candidate findings sent to validation.",
+              "type": "integer"
+            },
+            "executions": {
+              "description": "Agent executions, every attempt included.",
+              "type": "integer"
+            },
+            "pruv_executions": {
+              "type": "integer"
+            },
+            "reported_executions": {
+              "description": "Executions that reported a non-zero cost.",
+              "type": "integer"
+            },
+            "usd": {
+              "description": "Sum of the cost every execution reported; executions that reported none add nothing.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "usd",
+            "executions",
+            "reported_executions",
+            "pruv_executions",
+            "candidates"
+          ],
+          "type": "object"
+        },
+        "approval": {
+          "enum": [
+            "yes_flag",
+            "prompt",
+            "within_budget",
+            "no_budget",
+            "unchecked"
+          ],
+          "type": "string"
+        },
+        "budget_usd": {
+          "description": "Whole-run budget (cost.budget_usd); 0 means no budget.",
+          "type": "number"
+        },
+        "estimate": {
+          "additionalProperties": false,
+          "properties": {
+            "discovery_usd": {
+              "type": "number"
+            },
+            "files": {
+              "description": "Snapshot files the reviewers read.",
+              "type": "integer"
+            },
+            "harness_enforces_budget": {
+              "description": "Whether each term was capped at the per-execution agents.max_budget_usd.",
+              "type": "boolean"
+            },
+            "high_usd": {
+              "type": "number"
+            },
+            "kind": {
+              "description": "What was estimated: audit, verify, or total.",
+              "type": "string"
+            },
+            "low_usd": {
+              "type": "number"
+            },
+            "model": {
+              "description": "Cost model version.",
+              "type": "string"
+            },
+            "pruv_calls_high": {
+              "type": "integer"
+            },
+            "pruv_calls_low": {
+              "type": "integer"
+            },
+            "pruv_high_usd": {
+              "type": "number"
+            },
+            "pruv_low_usd": {
+              "type": "number"
+            },
+            "rates": {
+              "additionalProperties": false,
+              "properties": {
+                "discovery_usd": {
+                  "description": "One discovery execution.",
+                  "type": "number"
+                },
+                "file_review_usd": {
+                  "description": "One reviewer execution, per snapshot file.",
+                  "type": "number"
+                },
+                "pruv_call_usd": {
+                  "description": "One Pruv execution.",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "discovery_usd",
+                "file_review_usd",
+                "pruv_call_usd"
+              ],
+              "type": "object"
+            },
+            "reviewers": {
+              "type": "integer"
+            },
+            "reviewers_usd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "model",
+            "files",
+            "reviewers",
+            "pruv_calls_low",
+            "pruv_calls_high",
+            "rates",
+            "harness_enforces_budget",
+            "discovery_usd",
+            "reviewers_usd",
+            "pruv_low_usd",
+            "pruv_high_usd",
+            "low_usd",
+            "high_usd"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "estimate",
+        "budget_usd",
+        "approval",
+        "actual"
+      ],
+      "type": "object"
+    },
     "created_at": {
       "format": "date-time",
       "type": "string"

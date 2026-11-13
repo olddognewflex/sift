@@ -225,6 +225,28 @@ const (
 
 func (DirtyPolicy) Enum() []string { return []string{"refuse", "head", "include"} }
 
+// CostApproval records why a run was allowed to spend: the outcome of
+// checking the high cost estimate against the whole-run budget.
+type CostApproval string
+
+const (
+	// ApprovalYesFlag: over budget, and --yes was given.
+	ApprovalYesFlag CostApproval = "yes_flag"
+	// ApprovalPrompt: over budget, and the user agreed at a prompt.
+	ApprovalPrompt CostApproval = "prompt"
+	// ApprovalWithinBudget: the high estimate did not exceed the budget.
+	ApprovalWithinBudget CostApproval = "within_budget"
+	// ApprovalNoBudget: no budget is configured (cost.budget_usd is 0).
+	ApprovalNoBudget CostApproval = "no_budget"
+	// ApprovalUnchecked: over budget, but nothing asked for approval (no
+	// gate was wired in). Valid in any state.
+	ApprovalUnchecked CostApproval = "unchecked"
+)
+
+func (CostApproval) Enum() []string {
+	return []string{"yes_flag", "prompt", "within_budget", "no_budget", "unchecked"}
+}
+
 type enum interface {
 	~string
 	Enum() []string

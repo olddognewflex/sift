@@ -116,7 +116,7 @@ func TestProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Version != "2.34.2" || !slices.Contains(info.Capabilities, "restricted-file-scope") || slices.Contains(info.Capabilities, "budget-limit") {
+	if info.Version != "2.34.2" || !slices.Contains(info.Capabilities, "restricted-file-scope") || slices.Contains(info.Capabilities, harness.CapBudgetLimit) {
 		t.Fatalf("info = %+v", info)
 	}
 	if !slices.ContainsFunc(info.Unenforced, func(s string) bool { return strings.Contains(s, "spend limit") }) {

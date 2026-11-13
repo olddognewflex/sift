@@ -23,7 +23,7 @@ type scripted struct {
 func goodInfo() harness.Info {
 	return harness.Info{
 		Name: "scripted", Version: "1.0.0", Tools: []string{"Read"},
-		Capabilities: []string{"budget-limit", "restricted-file-scope"},
+		Capabilities: []string{harness.CapBudgetLimit, "restricted-file-scope"},
 		Enforcement:  []string{"scripted"}, Unenforced: []string{"scripted"},
 	}
 }

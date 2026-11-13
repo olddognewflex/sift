@@ -395,6 +395,54 @@ type Manifest struct {
 	// Verifies links a verify run to the audit run it re-checks (ADR 0006).
 	// It is nil for audit runs.
 	Verifies *VerifyTarget `json:"verifies,omitempty"`
+	// Cost is the pre-run estimate and the spend observed; absent in runs
+	// recorded before cost estimates existed.
+	Cost *RunCost `json:"cost,omitempty"`
+}
+
+// CostRates are the configured per-unit rates a cost estimate was computed
+// from.
+type CostRates struct {
+	DiscoveryUSD  float64 `json:"discovery_usd" desc:"One discovery execution."`
+	FileReviewUSD float64 `json:"file_review_usd" desc:"One reviewer execution, per snapshot file."`
+	PruvCallUSD   float64 `json:"pruv_call_usd" desc:"One Pruv execution."`
+}
+
+// CostEstimate is a pre-run cost estimate (internal/cost). It carries its
+// breakdown so it can be displayed and calibrated from the record alone.
+type CostEstimate struct {
+	Kind                  string    `json:"kind" desc:"What was estimated: audit, verify, or total."`
+	Model                 string    `json:"model" desc:"Cost model version."`
+	Files                 int       `json:"files" desc:"Snapshot files the reviewers read."`
+	Reviewers             int       `json:"reviewers"`
+	PruvCallsLow          int       `json:"pruv_calls_low"`
+	PruvCallsHigh         int       `json:"pruv_calls_high"`
+	Rates                 CostRates `json:"rates"`
+	HarnessEnforcesBudget bool      `json:"harness_enforces_budget" desc:"Whether each term was capped at the per-execution agents.max_budget_usd."`
+	DiscoveryUSD          float64   `json:"discovery_usd"`
+	ReviewersUSD          float64   `json:"reviewers_usd"`
+	PruvLowUSD            float64   `json:"pruv_low_usd"`
+	PruvHighUSD           float64   `json:"pruv_high_usd"`
+	LowUSD                float64   `json:"low_usd"`
+	HighUSD               float64   `json:"high_usd"`
+}
+
+// CostActual is the spend observed during a run.
+type CostActual struct {
+	USD                float64 `json:"usd" desc:"Sum of the cost every execution reported; executions that reported none add nothing."`
+	Executions         int     `json:"executions" desc:"Agent executions, every attempt included."`
+	ReportedExecutions int     `json:"reported_executions" desc:"Executions that reported a non-zero cost."`
+	PruvExecutions     int     `json:"pruv_executions"`
+	Candidates         int     `json:"candidates" desc:"Candidate findings sent to validation."`
+}
+
+// RunCost records a run's estimate, the budget and approval it ran under,
+// and its actual spend, so the cost model can be calibrated.
+type RunCost struct {
+	Estimate  CostEstimate `json:"estimate"`
+	BudgetUSD float64      `json:"budget_usd" desc:"Whole-run budget (cost.budget_usd); 0 means no budget."`
+	Approval  CostApproval `json:"approval"`
+	Actual    CostActual   `json:"actual"`
 }
 
 // Task returns the named task state, or nil.

@@ -296,7 +296,7 @@ func checkCancel(ctx context.Context, s *Sandbox) error {
 }
 
 func checkBudget(ctx context.Context, s *Sandbox) error {
-	if !slices.Contains(s.Info.Capabilities, "budget-limit") {
+	if !slices.Contains(s.Info.Capabilities, harness.CapBudgetLimit) {
 		disclosed := slices.ContainsFunc(s.Info.Unenforced, func(u string) bool {
 			u = strings.ToLower(u)
 			return strings.Contains(u, "budget") || strings.Contains(u, "spend")

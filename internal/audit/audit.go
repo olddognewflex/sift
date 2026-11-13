@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/olddognewflex/sift/internal/agent"
 	"github.com/olddognewflex/sift/internal/config"
 	"github.com/olddognewflex/sift/internal/contract"
+	"github.com/olddognewflex/sift/internal/cost"
 	"github.com/olddognewflex/sift/internal/findings"
 	"github.com/olddognewflex/sift/internal/harness"
 	"github.com/olddognewflex/sift/internal/report"
@@ -56,6 +58,14 @@ type Options struct {
 	Log io.Writer
 	// Now is the clock; defaults to time.Now.
 	Now func() time.Time
+	// Preflight is called only when the cost estimate exceeds
+	// cost.budget_usd, after setup succeeds and before the run is created
+	// or any agent runs. It must return ApprovalYesFlag or ApprovalPrompt
+	// to proceed; an error (or any other approval) aborts the audit with no
+	// run created. Within budget, or with no budget, the run proceeds
+	// without it. If it is nil, an over-budget run proceeds and is recorded
+	// as unchecked.
+	Preflight func(ctx context.Context, est contract.CostEstimate) (contract.CostApproval, error)
 }
 
 // Result is a finished (or stopped) run.
@@ -120,7 +130,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Fingerprint before the preflight, which may wait on a person, so that
+	// changes made meanwhile are caught by the integrity check.
 	before, err := source.Fingerprint(ctx, st.Root)
+	if err != nil {
+		return nil, err
+	}
+	runCost, err := preflight(ctx, opts, st, hinfo)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +150,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	a := &auditor{opts: opts, run: run, defs: defs, snapshot: run.Path(storage.SourceDir), schemas: schemas}
-	if err := a.initialize(ctx, st, hinfo); err != nil {
+	if err := a.initialize(ctx, st, hinfo, runCost); err != nil {
 		a.fail(ctx, err)
 		return &Result{Run: run, Manifest: a.manifest()}, err
 	}
@@ -147,6 +163,36 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	err = a.finalize(ctx, st.Root, before)
 	return &Result{Run: run, Manifest: a.manifest()}, err
+}
+
+// preflight estimates the run's cost from the snapshot it will export and
+// checks it against cost.budget_usd. Only an over-budget estimate goes to
+// Options.Preflight, which must approve it explicitly.
+func preflight(ctx context.Context, opts Options, st source.State, hinfo harness.Info) (*contract.RunCost, error) {
+	cfg := opts.Config
+	files, err := source.CountFiles(ctx, st, cfg.Audit.DirtyPolicy)
+	if err != nil {
+		return nil, err
+	}
+	est := cost.ForAudit(cfg, files, slices.Contains(hinfo.Capabilities, harness.CapBudgetLimit))
+	budget := cfg.Cost.BudgetUSD
+	var approval contract.CostApproval
+	switch {
+	case budget == 0:
+		approval = contract.ApprovalNoBudget
+	case !cost.OverBudget(est, budget):
+		approval = contract.ApprovalWithinBudget
+	case opts.Preflight == nil:
+		approval = contract.ApprovalUnchecked
+	default:
+		if approval, err = opts.Preflight(ctx, est); err != nil {
+			return nil, err
+		}
+		if approval != contract.ApprovalYesFlag && approval != contract.ApprovalPrompt {
+			return nil, fmt.Errorf("cost preflight returned approval %q for an over-budget run; want %s or %s", approval, contract.ApprovalYesFlag, contract.ApprovalPrompt)
+		}
+	}
+	return &contract.RunCost{Estimate: est, BudgetUSD: budget, Approval: approval}, nil
 }
 
 // checkSeparate refuses a runs directory inside the audited repository.
@@ -180,7 +226,7 @@ func agentSchemas() (map[string][]byte, error) {
 	return out, nil
 }
 
-func (a *auditor) initialize(ctx context.Context, st source.State, hinfo harness.Info) error {
+func (a *auditor) initialize(ctx context.Context, st source.State, hinfo harness.Info, runCost *contract.RunCost) error {
 	cfg := a.opts.Config
 	now := a.opts.Now().UTC()
 	host, _ := os.Hostname()
@@ -210,6 +256,7 @@ func (a *auditor) initialize(ctx context.Context, st source.State, hinfo harness
 			Tools: hinfo.Tools, CommandExecution: false, Network: false,
 			Enforcement: hinfo.Enforcement, Unenforced: hinfo.Unenforced,
 		},
+		Cost: runCost,
 	}
 	for _, t := range a.tasks() {
 		a.m.Tasks = append(a.m.Tasks, contract.TaskState{ID: t.ID, DependsOn: t.deps(), Status: contract.TaskPending})
@@ -323,6 +370,14 @@ func (a *auditor) runReview(ctx context.Context, reviewer string) error {
 func (a *auditor) runValidation(ctx context.Context) error {
 	candidates, err := a.collectCandidates()
 	if err != nil {
+		return err
+	}
+	if err := a.update(func(m *contract.Manifest) error {
+		if m.Cost != nil {
+			m.Cost.Actual.Candidates = len(candidates)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	cands := &contract.FindingSet{Header: contract.NewHeader(contract.KindFindings, a.run.ID), Findings: candidates}
@@ -521,6 +576,9 @@ func execute[T any, PT interface {
 		if uerr := a.update(func(m *contract.Manifest) error {
 			t := m.Task(taskID)
 			t.Executions = append(t.Executions, resultRel)
+			if m.Cost != nil {
+				recordSpend(&m.Cost.Actual, meta, def.Name == validatorAgent)
+			}
 			return nil
 		}); uerr != nil {
 			return out, uerr
@@ -541,6 +599,24 @@ func execute[T any, PT interface {
 		}
 	}
 	return *new(T), fmt.Errorf("agent %s: %w", def.Name, lastErr)
+}
+
+// recordSpend adds one execution attempt to the run's actual spend. The
+// harness boundary has no "cost reported" flag, so a positive CostUSD is
+// the only evidence of a report: Kiro reports none (ADR 0005), and a
+// genuine $0 report is indistinguishable from no report. Calibration
+// should therefore compare usd with the estimate only over runs where
+// reported_executions == executions.
+func recordSpend(a *contract.CostActual, meta harness.Meta, pruv bool) {
+	a.Executions++
+	if meta.CostUSD > 0 {
+		a.ReportedExecutions++
+		// Rounded to micro-dollars so float noise doesn't accumulate.
+		a.USD = math.Round((a.USD+meta.CostUSD)*1e6) / 1e6
+	}
+	if pruv {
+		a.PruvExecutions++
+	}
 }
 
 // ---------------------------------------------------------------------------

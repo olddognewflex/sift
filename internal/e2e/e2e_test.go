@@ -104,6 +104,12 @@ agents: {timeout: 10m, max_budget_usd: 1}
 	if m.Harness.Name != harnessName {
 		t.Errorf("run recorded harness %q, want %q", m.Harness.Name, harnessName)
 	}
+	// Calibration data for the cost model (internal/cost); not asserted.
+	if c := m.Cost; c != nil {
+		t.Logf("cost: estimate $%.2f–$%.2f (%s, %d files, enforced %t); actual $%.4f over %d executions (%d reported, %d pruv, %d candidates)",
+			c.Estimate.LowUSD, c.Estimate.HighUSD, c.Estimate.Model, c.Estimate.Files, c.Estimate.HarnessEnforcesBudget,
+			c.Actual.USD, c.Actual.Executions, c.Actual.ReportedExecutions, c.Actual.PruvExecutions, c.Actual.Candidates)
+	}
 	// Every harness has limits; the run must disclose them.
 	if len(m.Policy.Unenforced) == 0 {
 		t.Error("manifest lists no unenforced guarantees")

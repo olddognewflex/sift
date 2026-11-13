@@ -64,6 +64,22 @@ agents:
 	}
 }
 
+func TestParseCostOverrides(t *testing.T) {
+	cfg, err := Parse([]byte(`
+cost:
+  budget_usd: 0
+  expected_findings_per_reviewer: 0
+  rates: {pruv_call_usd: 1.25}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := CostConfig{BudgetUSD: 0, ExpectedFindingsPerReviewer: 0, Rates: CostRates{DiscoveryUSD: 0.50, FileReviewUSD: 0.02, PruvCallUSD: 1.25}}
+	if cfg.Cost != want {
+		t.Errorf("cost = %+v, want %+v", cfg.Cost, want)
+	}
+}
+
 func TestEmptyFileIsDefaults(t *testing.T) {
 	cfg, err := Parse(nil)
 	if err != nil || !reflect.DeepEqual(cfg, Default()) {
@@ -86,6 +102,22 @@ func TestParseRejects(t *testing.T) {
 		"budget":           "agents: {max_budget_usd: 0}\n",
 		"harness":          "harness: {name: other}\n",
 		"retries":          "agents: {retries: 9}\n",
+		"cost budget":      "cost: {budget_usd: -1}\n",
+		"cost rate":        "cost: {rates: {file_review_usd: -0.01}}\n",
+		"discovery rate":   "cost: {rates: {discovery_usd: -1}}\n",
+		"pruv rate":        "cost: {rates: {pruv_call_usd: -1}}\n",
+		"expected high":    "cost: {expected_findings_per_reviewer: 51}\n",
+		"expected low":     "cost: {expected_findings_per_reviewer: -1}\n",
+		"cost unknown key": "cost: {rates: {token_usd: 1}}\n",
+		"budget nan":       "cost: {budget_usd: .nan}\n",
+		"budget inf":       "cost: {budget_usd: .inf}\n",
+		"rate nan":         "cost: {rates: {pruv_call_usd: .nan}}\n",
+		"rate inf":         "cost: {rates: {file_review_usd: .inf}}\n",
+		"discovery nan":    "cost: {rates: {discovery_usd: .nan}}\n",
+		"agent budget nan": "agents: {max_budget_usd: .nan}\n",
+		"agent budget inf": "agents: {max_budget_usd: .inf}\n",
+		"override nan":     "agents: {overrides: {pruv: {max_budget_usd: .nan}}}\n",
+		"override inf":     "agents: {overrides: {pruv: {max_budget_usd: .inf}}}\n",
 	}
 	for name, doc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -102,7 +102,7 @@ func (h *Harness) Probe(ctx context.Context) (harness.Info, error) {
 	if len(missing) > 0 {
 		return info, &harness.Error{Kind: harness.ErrUnsupported, Msg: fmt.Sprintf("claude %s lacks required flags %v", info.Version, missing)}
 	}
-	info.Capabilities = append([]string{"structured-output", "tool-allowlist", "restricted-file-scope", "safe-mode", "budget-limit"}, requiredFlags...)
+	info.Capabilities = append([]string{"structured-output", "tool-allowlist", "restricted-file-scope", "safe-mode", harness.CapBudgetLimit}, requiredFlags...)
 	return info, nil
 }
 
