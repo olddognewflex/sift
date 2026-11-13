@@ -714,6 +714,39 @@ func TestPreflightApprovalIsRecorded(t *testing.T) {
 	}
 }
 
+func TestEstimateIsLoggedForEveryRun(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget float64
+	}{{"no budget", 0}, {"within", 100}, {"over", 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.cfg.Cost.BudgetUSD = tc.budget
+			var log strings.Builder
+			var atPreflight string
+			res, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: e.h, Store: e.store, SiftVersion: "test", Log: &log,
+				Preflight: func(context.Context, contract.CostEstimate) (contract.CostApproval, error) {
+					atPreflight = log.String()
+					return contract.ApprovalYesFlag, nil
+				}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := res.Manifest.Cost
+			var want strings.Builder
+			for _, l := range cost.Lines(c.Estimate, c.BudgetUSD) {
+				want.WriteString("sift: " + l + "\n")
+			}
+			if !strings.HasPrefix(log.String(), want.String()) {
+				t.Errorf("log should start with the estimate\n%s\ngot\n%s", want.String(), log.String())
+			}
+			if tc.budget == 1 && atPreflight != want.String() {
+				t.Errorf("estimate must be logged before Preflight is asked; it had seen\n%s", atPreflight)
+			}
+		})
+	}
+}
+
 func TestPreflightOnlyCalledOverBudget(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

@@ -216,12 +216,14 @@ sift init                       # writes a documented sift.yaml with defaults
 sift audit .                    # runs a full audit of the Git repository
 sift audit . --dirty=include    # audits uncommitted changes too (default: refuse)
 sift audit . --harness kiro     # runs the agents with Kiro CLI instead of Claude Code
+sift audit . --yes              # proceeds even if the cost estimate exceeds cost.budget_usd
 sift status [--run ID] [--json] # shows run state, tasks, cost, warnings
 sift findings [--state confirmed] [--json]
 sift report [--regenerate]      # prints report paths, or rebuilds them from artifacts
 ```
 
 `sift audit` exits with 0 when the audit completed, 2 when results are partial, 130 when interrupted, and 1 when it failed.
+Before any agent runs, it prints a cost estimate on stderr. If the high end exceeds `cost.budget_usd`, it asks for confirmation when stdin and stderr are both terminals; otherwise (scripts, CI, agent integrations, or stderr redirected to a file) it refuses with exit 1 and creates no run, unless you pass `--yes`. Only `y` or `yes` followed by Enter confirms.
 Runs are stored in `~/.sift/runs/<run-id>/`, which is never inside the audited repository.
 Each run directory holds the manifest, the read-only source snapshot, every agent prompt and its raw output, the validated artifacts, and the reports.
 
@@ -253,6 +255,8 @@ Artifact JSON Schemas: [schemas/](schemas/).
 Requirements: Git, and either Claude Code 2.1.311 or later or Kiro CLI 2.34.2 or later on `PATH`, signed in. Select the harness with `harness.name` (`claude-code` or `kiro`) in `sift.yaml`.
 
 Agents run read-only against a snapshot. The harness enforces this, but it is not an operating-system sandbox. See [ADR 0002](docs/decisions/0002-claude-code-harness.md) (Claude Code) and [ADR 0005](docs/decisions/0005-kiro-harness.md) (Kiro) for exactly what is and isn't guaranteed. Kiro cannot enforce `max_budget_usd`.
+
+Two separate spend limits apply. `agents.max_budget_usd` (default $3) caps each agent execution and is enforced by the harness (Claude Code only). `cost.budget_usd` (default $15; 0 disables it) is checked against the whole run's pre-run estimate, which Sift computes from configured rates in `cost.rates`. Those rates are uncalibrated guesses: each run's manifest records the estimate next to the actual reported spend (`sift status` shows both), so they can be tuned. See [ADR 0007](docs/decisions/0007-pre-run-cost-estimate.md).
 
 ## Technology Direction
 

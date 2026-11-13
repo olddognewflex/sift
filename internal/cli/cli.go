@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"github.com/olddognewflex/sift/internal/audit"
 	"github.com/olddognewflex/sift/internal/config"
 	"github.com/olddognewflex/sift/internal/contract"
+	"github.com/olddognewflex/sift/internal/cost"
 	"github.com/olddognewflex/sift/internal/harness"
 	"github.com/olddognewflex/sift/internal/harness/claudecode"
 	"github.com/olddognewflex/sift/internal/harness/kiro"
@@ -45,7 +47,13 @@ func (e *ExitCodeError) Unwrap() error { return e.Err }
 // Deps are the CLI's external dependencies, replaceable in tests.
 type Deps struct {
 	Stdout, Stderr io.Writer
-	Version        string
+	// Stdin answers the over-budget prompt. Defaults to os.Stdin.
+	Stdin io.Reader
+	// Interactive reports whether a person can see the over-budget prompt
+	// and answer it. Defaults to whether Stdin and Stderr (where the
+	// prompt goes) are both terminals.
+	Interactive func() bool
+	Version     string
 	// NewHarness builds the configured harness.
 	NewHarness func(config.Config) (harness.Harness, error)
 	Now        func() time.Time
@@ -69,6 +77,13 @@ func New(d Deps) *cobra.Command {
 	}
 	if d.NewHarness == nil {
 		d.NewHarness = DefaultHarness
+	}
+	if d.Stdin == nil {
+		d.Stdin = os.Stdin
+	}
+	if d.Interactive == nil {
+		stdin, stderr := d.Stdin, d.Stderr
+		d.Interactive = func() bool { return interactive(stdin, stderr, isTerminal) }
 	}
 	var configPath string
 	root := &cobra.Command{
@@ -144,14 +159,20 @@ func initCmd(d Deps, configPath *string) *cobra.Command {
 
 func auditCmd(d Deps, load loader) *cobra.Command {
 	var dirty, model, harnessName string
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "audit <path>",
 		Short: "Audit a Git repository",
 		Long: `Runs a full audit: records the repository state, exports a read-only snapshot,
 runs discovery, the configured reviewers, and Pruv validation, then writes reports.
 
+Before any agent runs, Sift prints a cost estimate. If its high end exceeds
+cost.budget_usd, the audit asks for confirmation when stdin and stderr are
+both terminals; otherwise it refuses (exit 1, no run created) unless --yes
+is given.
+
 Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
-130 interrupted, 1 failed or could not start.`,
+130 interrupted, 1 failed, could not start, or refused over budget.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, store, err := load()
@@ -179,6 +200,7 @@ Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
 			res, err := audit.Run(cmd.Context(), audit.Options{
 				RepoPath: args[0], Config: cfg, Harness: h, Store: store,
 				SiftVersion: d.Version, Log: d.Stderr, Now: d.Now,
+				Preflight: spendGate(d, cfg.Cost.BudgetUSD, yes),
 			})
 			if res == nil {
 				if err != nil && cmd.Context().Err() != nil {
@@ -210,7 +232,87 @@ Exit status: 0 completed, 2 partial (some stages failed; results incomplete),
 	cmd.Flags().StringVar(&dirty, "dirty", "", "dirty working tree policy: refuse, head, or include (overrides config)")
 	cmd.Flags().StringVar(&model, "model", "", "model passed to the harness (overrides config)")
 	cmd.Flags().StringVar(&harnessName, "harness", "", "agent harness: claude-code or kiro (overrides config; switching harness resets binary and model to its defaults)")
+	cmd.Flags().BoolVar(&yes, "yes", false, "proceed without confirmation when the cost estimate exceeds cost.budget_usd")
 	return cmd
+}
+
+// spendGate is the confirmation step for a run whose estimated cost
+// exceeds the run budget (cost.budget_usd), shaped for a Preflight hook.
+// The caller has already printed the estimate and decided the run is over
+// budget; the gate only obtains approval. With --yes it proceeds. When a
+// person can answer (Deps.Interactive), it asks on stderr and reads one
+// line from stdin; only y or yes ended by Enter proceeds, and an interrupt
+// while it waits returns the context's error. Otherwise it refuses, so
+// scripts and agents never spend past the budget unattended. It knows
+// nothing about what kind of run it guards. A cancelled context never
+// yields an approval.
+func spendGate(d Deps, budget float64, yes bool) func(context.Context, contract.CostEstimate) (contract.CostApproval, error) {
+	return func(ctx context.Context, est contract.CostEstimate) (contract.CostApproval, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		refusal := fmt.Errorf("estimated cost up to $%.2f exceeds the run budget $%.2f (cost.budget_usd); rerun with --yes or raise cost.budget_usd", est.HighUSD, budget)
+		switch {
+		case yes:
+			fmt.Fprintln(d.Stderr, "sift: over budget; proceeding (--yes)")
+			return contract.ApprovalYesFlag, nil
+		case !d.Interactive():
+			return "", refusal
+		}
+		fmt.Fprintf(d.Stderr, "Estimated cost up to $%.2f exceeds budget $%.2f. Continue? [y/N] ", est.HighUSD, budget)
+		type reply struct {
+			line string
+			err  error
+		}
+		// A blocked read can't be cancelled, so it runs in a goroutine that
+		// is abandoned on interrupt; the process exits soon after. The
+		// limit bounds what a runaway input can make it buffer.
+		replies := make(chan reply, 1)
+		go func() {
+			line, err := bufio.NewReader(io.LimitReader(d.Stdin, maxAnswer)).ReadString('\n')
+			replies <- reply{line, err}
+		}()
+		var r reply
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(d.Stderr)
+			return "", ctx.Err()
+		case r = <-replies:
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		// Only a line ended by Enter is an answer. Input that stops without
+		// one (Ctrl-D, a closed stream, an over-long line) never approves
+		// spending, even if it reads "y".
+		complete := strings.HasSuffix(r.line, "\n")
+		if !complete {
+			fmt.Fprintln(d.Stderr) // end the prompt line
+		}
+		if r.err != nil && !errors.Is(r.err, io.EOF) {
+			return "", fmt.Errorf("read confirmation: %w", r.err)
+		}
+		if answer := strings.ToLower(strings.TrimSpace(r.line)); complete && (answer == "y" || answer == "yes") {
+			return contract.ApprovalPrompt, nil
+		}
+		return "", fmt.Errorf("not confirmed: %w", refusal)
+	}
+}
+
+// maxAnswer bounds the bytes read for one answer to the prompt.
+const maxAnswer = 1024
+
+// interactive reports whether a person can see a prompt on stderr and
+// answer it on stdin: both must be terminals. A terminal stdin with stderr
+// redirected to a file would otherwise wait on a prompt nobody sees.
+func interactive(stdin io.Reader, stderr io.Writer, isTerm func(any) bool) bool {
+	return isTerm(stdin) && isTerm(stderr)
+}
+
+// isTerminal reports whether v is an *os.File that is a terminal.
+func isTerminal(v any) bool {
+	f, ok := v.(*os.File)
+	return ok && f != nil && isTerminalFile(f)
 }
 
 func statusCmd(d Deps, load loader) *cobra.Command {
@@ -418,13 +520,24 @@ func printStatus(w io.Writer, run *storage.Run, m *contract.Manifest, status con
 	}
 	tw.Flush()
 
-	var cost float64
+	var spent float64
 	var denials int
 	for _, e := range execs {
-		cost += e.CostUSD
+		spent += e.CostUSD
 		denials += e.PermissionDenials
 	}
-	fmt.Fprintf(w, "\nAgent executions: %d, reported cost $%.2f, denied tool calls %d\n", len(execs), cost, denials)
+	fmt.Fprintln(w)
+	if c := m.Cost; c != nil {
+		// Runs since ADR 0007 record their estimate and spend; older runs
+		// only have the per-execution results.
+		detail := approvalLabel(c.Approval)
+		if c.BudgetUSD > 0 {
+			detail = fmt.Sprintf("budget $%.2f, %s", c.BudgetUSD, detail)
+		}
+		fmt.Fprintf(w, "Estimate:   %s (%s)\n", cost.USDRange(c.Estimate.LowUSD, c.Estimate.HighUSD), detail)
+		spent = c.Actual.USD
+	}
+	fmt.Fprintf(w, "Agent executions: %d, reported cost $%.2f, denied tool calls %d\n", len(execs), spent, denials)
 	if data, err := report.Load(run); err == nil && len(data.Items) > 0 {
 		counts := map[contract.ValidationState]int{}
 		for _, it := range data.Items {
@@ -450,6 +563,23 @@ func printStatus(w io.Writer, run *storage.Run, m *contract.Manifest, status con
 	if paths, err := report.Paths(run); err == nil {
 		fmt.Fprintf(w, "\nReports:    %s\n", filepath.Dir(paths[0]))
 	}
+}
+
+// approvalLabel describes how a run's cost was approved, for people.
+func approvalLabel(a contract.CostApproval) string {
+	switch a {
+	case contract.ApprovalYesFlag:
+		return "approved with --yes"
+	case contract.ApprovalPrompt:
+		return "approved at prompt"
+	case contract.ApprovalWithinBudget:
+		return "within budget"
+	case contract.ApprovalNoBudget:
+		return "no budget set"
+	case contract.ApprovalUnchecked:
+		return "not checked"
+	}
+	return string(a)
 }
 
 func firstLine(s string) string {

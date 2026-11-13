@@ -123,7 +123,7 @@ func Lines(est contract.CostEstimate, budget float64) []string {
 	default:
 		head = fmt.Sprintf("cost estimate (%s, %d files, %d reviewers)", est.Kind, est.Files, est.Reviewers)
 	}
-	lines := []string{head + ": " + usdRange(est.LowUSD, est.HighUSD)}
+	lines := []string{head + ": " + USDRange(est.LowUSD, est.HighUSD)}
 	row := func(label, detail, amount string) {
 		lines = append(lines, fmt.Sprintf("  %-10s %-22s %s", label, detail, amount))
 	}
@@ -158,7 +158,7 @@ func Lines(est contract.CostEstimate, budget float64) []string {
 	if est.PruvCallsLow != est.PruvCallsHigh {
 		calls = fmt.Sprintf("%d–%d", est.PruvCallsLow, est.PruvCallsHigh)
 	}
-	amount := usdRange(est.PruvLowUSD, est.PruvHighUSD)
+	amount := USDRange(est.PruvLowUSD, est.PruvHighUSD)
 	if wasCapped(est.PruvHighUSD, float64(est.PruvCallsHigh)*est.Rates.PruvCallUSD) {
 		amount += capped
 	}
@@ -213,7 +213,10 @@ func rate(v float64) string {
 	return "$" + strings.TrimRight(fmt.Sprintf("%.4f", v), "0")
 }
 
-func usdRange(low, high float64) string {
+// USDRange formats a low–high amount in dollars and cents, or a single
+// amount when both round to the same cent. Every display of an estimate
+// uses it, so the CLI and the estimate lines agree.
+func USDRange(low, high float64) string {
 	if usd(low) == usd(high) {
 		return usd(low)
 	}

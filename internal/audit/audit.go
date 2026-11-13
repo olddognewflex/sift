@@ -60,7 +60,8 @@ type Options struct {
 	Now func() time.Time
 	// Preflight is called only when the cost estimate exceeds
 	// cost.budget_usd, after setup succeeds and before the run is created
-	// or any agent runs. It must return ApprovalYesFlag or ApprovalPrompt
+	// or any agent runs. The estimate has already been written to Log, so
+	// Preflight need not print it. It must return ApprovalYesFlag or ApprovalPrompt
 	// to proceed; an error (or any other approval) aborts the audit with no
 	// run created. Within budget, or with no budget, the run proceeds
 	// without it. If it is nil, an over-budget run proceeds and is recorded
@@ -165,9 +166,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	return &Result{Run: run, Manifest: a.manifest()}, err
 }
 
-// preflight estimates the run's cost from the snapshot it will export and
-// checks it against cost.budget_usd. Only an over-budget estimate goes to
-// Options.Preflight, which must approve it explicitly.
+// preflight estimates the run's cost from the snapshot it will export,
+// logs it, and checks it against cost.budget_usd. Only an over-budget
+// estimate goes to Options.Preflight, which must approve it explicitly.
 func preflight(ctx context.Context, opts Options, st source.State, hinfo harness.Info) (*contract.RunCost, error) {
 	cfg := opts.Config
 	files, err := source.CountFiles(ctx, st, cfg.Audit.DirtyPolicy)
@@ -176,6 +177,12 @@ func preflight(ctx context.Context, opts Options, st source.State, hinfo harness
 	}
 	est := cost.ForAudit(cfg, files, slices.Contains(hinfo.Capabilities, harness.CapBudgetLimit))
 	budget := cfg.Cost.BudgetUSD
+	if opts.Log != nil {
+		// No auditor (and so no logf) exists yet, and nothing else logs.
+		for _, line := range cost.Lines(est, budget) {
+			fmt.Fprintf(opts.Log, "sift: %s\n", line)
+		}
+	}
 	var approval contract.CostApproval
 	switch {
 	case budget == 0:

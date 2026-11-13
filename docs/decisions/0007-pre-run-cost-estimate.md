@@ -1,6 +1,6 @@
 # ADR 0007: Estimate a run's cost before any agent runs
 
-**Status:** accepted (the spend gate lands in a follow-up change)
+**Status:** accepted
 
 ## Context
 
@@ -50,13 +50,20 @@ was right.
    succeeds (and after the repository fingerprint is taken, so edits made
    while a person decides are caught) and before a run directory is
    created. It may answer only `yes_flag` or `prompt`; an error or any
-   other answer aborts with no run created. The CLI will ask on a TTY,
-   refuse non-interactively with exit 1 and no run directory, and proceed
-   with `--yes`. **This change adds only the hook; the CLI gate follows
-   separately.** Until it lands, nothing sets `Preflight`, so an
-   over-budget run proceeds and records `unchecked`, although the
-   `sift init` template already documents the gate. Verify will use the
-   same hook with `ForVerify`.
+   other answer aborts with no run created. The orchestrator logs the
+   estimate for every run before that, so it is always printed before any
+   agent runs. The CLI wires the hook (`spendGate`): with `--yes` it
+   proceeds (`yes_flag`). When stdin and stderr are both terminals (a
+   termios query; stderr too, because the prompt goes there and a
+   redirected stderr would hide it) it asks `[y/N]` on stderr and proceeds
+   only on `y` or `yes` ended by Enter (`prompt`); input that ends without
+   Enter refuses, and an interrupt while it waits exits 130 with no run.
+   Otherwise it refuses with exit 1 and no run directory, naming `--yes`
+   and `cost.budget_usd`. Agent
+   integrations, which run non-interactively, relay that refusal to the
+   user and rerun with `--yes` only if they agree. A library caller that
+   leaves `Preflight` nil still gets an over-budget run recorded as
+   `unchecked`. Verify will use the same gate with `ForVerify`.
 
 4. **Calibration record.** The manifest gains an optional `cost` field: the
    estimate with its breakdown, the budget, how the run was approved

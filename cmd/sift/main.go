@@ -21,5 +21,5 @@ func main() {
 		<-ctx.Done()
 		stop()
 	}()
-	os.Exit(cli.Execute(ctx, cli.Deps{Stdout: os.Stdout, Stderr: os.Stderr, Version: version}, os.Args[1:]))
+	os.Exit(cli.Execute(ctx, cli.Deps{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, Version: version}, os.Args[1:]))
 }
