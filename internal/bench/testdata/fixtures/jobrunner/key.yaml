@@ -6,23 +6,26 @@ entries:
     category: correctness
     title: drain does not wait for the jobs it starts
     locations:
-      - {path: src/worker.ts, start_line: 35, end_line: 39}
-      - {path: src/index.ts, start_line: 25, end_line: 30}
-    anchor: "jobs.forEach(async (job) => {"
+      - {path: src/worker.ts, start_line: 36, end_line: 44}
+      - {path: src/index.ts, start_line: 27, end_line: 36}
+    anchor: "lanes.forEach(async () => {"
     notes: >-
-      drain starts each ready job inside jobs.forEach(async ...).
-      forEach ignores the promises the callbacks return, and those runs
-      are never added to this.active, so `await Promise.all(this.active)`
-      waits only for jobs started by tick. drain resolves while the
-      drained jobs are still running, contradicting its doc comment;
-      shutdown in index.ts then calls process.exit(0), killing them
-      mid-run and leaving their records stuck at "running". Any error
-      thrown from those runs is also an unhandled rejection.
+      drain starts its lanes with lanes.forEach(async ...). forEach
+      ignores the promises the callbacks return and nothing else awaits
+      them (the only await, on this.active, happens before the lanes
+      start), so drain resolves as soon as the lanes have started their
+      first jobs, contradicting its doc comment ("Resolves once they have
+      all finished"). shutdown in index.ts then calls process.exit(0),
+      killing the drained jobs mid-run, leaving their records stuck at
+      "running" and never starting the rest of the ready jobs. Any error
+      thrown from those runs is also an unhandled rejection. Concurrency
+      itself is respected: the lanes start only after running jobs finish
+      and number at most options.concurrency.
   - id: C-D2
     kind: defect
     category: correctness
     title: attempts is counted only on success, so failing jobs retry forever
-    locations: [{path: src/worker.ts, start_line: 60, end_line: 70}]
+    locations: [{path: src/worker.ts, start_line: 65, end_line: 75}]
     anchor: "job.attempts += 1;"
     notes: >-
       run increments job.attempts only after the handler resolves. On

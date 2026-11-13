@@ -10,9 +10,20 @@ def test_line_rejects_non_positive_quantity():
         Line("Consulting", 0, 100.0)
 
 
-def test_line_rejects_negative_price():
+@pytest.mark.parametrize("quantity", [1.5, float("nan"), float("inf"), True])
+def test_line_rejects_non_integer_quantity(quantity):
     with pytest.raises(ValueError):
-        Line("Discount", 1, -10.0)
+        Line("Consulting", quantity, 100.0)
+
+
+@pytest.mark.parametrize("price", [-10.0, float("nan"), float("inf"), float("-inf")])
+def test_line_rejects_bad_price(price):
+    with pytest.raises(ValueError):
+        Line("Consulting", 1, price)
+
+
+def test_line_accepts_zero_price():
+    assert Line("Goodwill visit", 1, 0.0).price == 0.0
 
 
 def test_total_includes_tax():

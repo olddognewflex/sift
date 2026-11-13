@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 
@@ -19,10 +20,10 @@ class Line:
     def __post_init__(self) -> None:
         if not self.description.strip():
             raise ValueError("line description is required")
-        if self.quantity <= 0:
-            raise ValueError(f"line quantity must be positive, got {self.quantity}")
-        if self.price < 0:
-            raise ValueError(f"line price must not be negative, got {self.price}")
+        if isinstance(self.quantity, bool) or not isinstance(self.quantity, int) or self.quantity <= 0:
+            raise ValueError(f"line quantity must be a positive integer, got {self.quantity!r}")
+        if not math.isfinite(self.price) or self.price < 0:
+            raise ValueError(f"line price must be a finite, non-negative number, got {self.price!r}")
 
 
 class Invoice:

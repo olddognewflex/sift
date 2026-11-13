@@ -6,7 +6,7 @@ entries:
     category: correctness
     title: Invoice uses a mutable default list, so invoices share their lines
     locations:
-      - {path: invoicer/models.py, start_line: 37, end_line: 48}
+      - {path: invoicer/models.py, start_line: 38, end_line: 49}
       - {path: invoicer/cli.py, start_line: 41, end_line: 43}
     anchor: "lines: list[Line] = [],"
     notes: >-
@@ -22,7 +22,7 @@ entries:
     kind: defect
     category: correctness
     title: is_paid compares float amounts for exact equality
-    locations: [{path: invoicer/models.py, start_line: 67, end_line: 68}]
+    locations: [{path: invoicer/models.py, start_line: 68, end_line: 69}]
     anchor: "return self.amount_paid == self.total()"
     notes: >-
       total() is a float sum of line prices plus rounded tax, and
@@ -72,17 +72,19 @@ entries:
     anchor: "round(line.price / line.quantity, 2)"
     notes: >-
       Line is a frozen dataclass whose __post_init__ raises ValueError
-      when quantity <= 0, and every Line is built through that
-      constructor (cmd_import, InvoiceRepository._invoice). Frozen
+      unless quantity is an int (bools excluded) greater than zero, so
+      floats such as nan or 0.5 are rejected too. Every Line is built
+      through that constructor (cmd_import passes int(row["quantity"]),
+      InvoiceRepository._invoice passes the INTEGER column), and frozen
       instances cannot be mutated afterwards, so line.quantity is always
-      a positive int and the division cannot raise.
+      a positive int and the division cannot raise or produce nan.
   - id: B-X2
     kind: decoy
     category: architecture
     title: tax and models import each other circularly
     locations:
       - {path: invoicer/tax.py, start_line: 5, end_line: 8}
-      - {path: invoicer/models.py, start_line: 8, end_line: 8}
+      - {path: invoicer/models.py, start_line: 9, end_line: 9}
     anchor: "if TYPE_CHECKING:"
     notes: >-
       models.py imports tax at runtime, but tax.py imports Invoice only

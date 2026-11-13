@@ -26,17 +26,22 @@ export class Worker {
   }
 
   /**
-   * Stops polling, runs every job that is ready now, and resolves once those
-   * jobs and any already running have finished.
+   * Stops polling, lets running jobs finish, then runs every job that is
+   * ready, at most `concurrency` at a time. Resolves once they have all
+   * finished.
    */
   async drain(): Promise<void> {
     clearInterval(this.timer);
     this.timer = undefined;
-    const jobs = this.queue.takeReady(Date.now(), Infinity);
-    jobs.forEach(async (job) => {
-      await this.run(job);
-    });
     await Promise.all(this.active);
+    const jobs = this.queue.takeReady(Date.now(), Infinity);
+    const lanes = Array.from({ length: Math.min(this.options.concurrency, jobs.length) }, (_, i) => i);
+    lanes.forEach(async () => {
+      let job: Job | undefined;
+      while ((job = jobs.shift()) !== undefined) {
+        await this.run(job);
+      }
+    });
   }
 
   private tick(): void {

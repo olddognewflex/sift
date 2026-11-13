@@ -22,7 +22,13 @@ const server = app.listen(port, () => {
 });
 worker.start();
 
+let stopping = false;
+
 async function shutdown(signal: string): Promise<void> {
+  if (stopping) {
+    return;
+  }
+  stopping = true;
   console.log(`${signal}: draining jobs`);
   server.close();
   await worker.drain();
