@@ -58,6 +58,7 @@ each decision is saved as soon as it is made. The report always runs.
 | `internal/findings` | Finding IDs, mechanical evidence checks, state transitions, evidence gate |
 | `internal/audit` | Orchestrator: scheduler, task implementations, retries, run state |
 | `internal/report` | Deterministic Markdown reports from persisted artifacts |
+| `internal/bench` | Benchmark scoring, offline and pure: answer keys, fixture loading and digests, observations from a run, matching rules, precision and recall (ADR 0008, `docs/benchmark.md`) |
 
 There is only one interface that real code substitutes:
 `harness.Harness` (Claude Code or Kiro in production, the fake in tests).
