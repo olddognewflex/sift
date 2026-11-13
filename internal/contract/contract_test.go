@@ -303,8 +303,15 @@ func TestVerificationSetValidation(t *testing.T) {
 		})
 	}
 	invalid := map[string]func(*VerificationSet){
-		"wrong kind":            func(s *VerificationSet) { s.Kind = KindDecisions },
-		"no finding id":         func(s *VerificationSet) { s.Records[0].FindingID = "" },
+		"wrong kind":           func(s *VerificationSet) { s.Kind = KindDecisions },
+		"no finding id":        func(s *VerificationSet) { s.Records[0].FindingID = "" },
+		"no validator":         func(s *VerificationSet) { s.Records[0].Validator = "" },
+		"no validator version": func(s *VerificationSet) { s.Records[0].ValidatorVersion = " " },
+		"unverified without validator": func(s *VerificationSet) {
+			r := &s.Records[0]
+			r.Decision, r.AdditionalChecks, r.AdditionalPriorMatches = nil, nil, nil
+			r.Outcome, r.Error, r.Validator = OutcomeUnverified, "timed out", ""
+		},
 		"duplicate finding":     func(s *VerificationSet) { s.Records = append(s.Records, s.Records[0]) },
 		"rejected original":     func(s *VerificationSet) { s.Records[0].OriginalState = StateRejected },
 		"needs investigation":   func(s *VerificationSet) { s.Records[0].OriginalState = StateNeedsInvestigation },

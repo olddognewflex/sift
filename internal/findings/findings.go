@@ -171,23 +171,52 @@ func normalize(s string) []line {
 	return out
 }
 
-// find returns every place the excerpt occurs in file. The first and last
-// excerpt lines may be partial lines; inner lines must match exactly.
+// find returns every place the excerpt occurs in file, one span per
+// occurrence: a single-line excerpt that occurs twice on one line yields two
+// identical spans, so callers counting matches see the ambiguity. The first
+// and last excerpt lines may be partial lines; inner lines must match
+// exactly.
 func find(file, ex []line) []span {
 	var out []span
 	k := len(ex)
 	for i := 0; i+k <= len(file); i++ {
-		if matchAt(file[i:i+k], ex) {
+		for range matchesAt(file[i:i+k], ex) {
 			out = append(out, span{file[i].no, file[i+k-1].no})
 		}
 	}
 	return out
 }
 
-func matchAt(f, ex []line) bool {
+// matchesAt counts the occurrences of ex starting at the first line of f.
+// A multi-line excerpt is anchored to the line ends, so it occurs at most
+// once; a single-line excerpt may occur several times, overlapping ones
+// included.
+func matchesAt(f, ex []line) int {
 	if len(ex) == 1 {
-		return strings.Contains(f[0].text, ex[0].text)
+		return countOverlapping(f[0].text, ex[0].text)
 	}
+	if matchAt(f, ex) {
+		return 1
+	}
+	return 0
+}
+
+// countOverlapping counts occurrences of sub in s, including overlapping
+// ones; sub must not be empty.
+func countOverlapping(s, sub string) int {
+	n := 0
+	for i := strings.Index(s, sub); i >= 0; {
+		n++
+		j := strings.Index(s[i+1:], sub)
+		if j < 0 {
+			break
+		}
+		i += 1 + j
+	}
+	return n
+}
+
+func matchAt(f, ex []line) bool {
 	last := len(ex) - 1
 	if !strings.HasSuffix(f[0].text, ex[0].text) || !strings.HasPrefix(f[last].text, ex[last].text) {
 		return false

@@ -63,6 +63,8 @@ func TestRelocate(t *testing.T) {
 			ev: src("stats.go", 6, 6, loop), want: contract.CheckRelocated, path: "pkg/stats/max.go", start: 6, end: 6},
 		{name: "two matches", files: map[string]string{"stats.go": minSource, "a.go": sample, "b.go": sample},
 			ev: src("stats.go", 6, 6, loop), want: contract.CheckMismatch, detail: "matches 2 place(s)"},
+		{name: "two matches on one line", files: map[string]string{"stats.go": minSource, "a.go": loop + " /* " + loop + " */\n"},
+			ev: src("stats.go", 6, 6, loop), want: contract.CheckMismatch, detail: "matches 2 place(s)"},
 		{name: "two matches after deletion", files: map[string]string{"a.go": sample, "b/c.go": sample},
 			ev: src("stats.go", 6, 6, loop), want: contract.CheckMissingFile, detail: "matches 2 place(s)"},
 		{name: "excerpt under 20 characters", files: map[string]string{"stats.go": strings.Repeat("// gone\n", 12), "other.go": sample},
@@ -107,6 +109,7 @@ func TestPriorMatches(t *testing.T) {
 		"dup/a.go": "\t\t" + loop + "\n",
 		"dup/b.go": "package b\n\n" + loop + "\n",
 		"dup/c.go": "// twice: Min returns the smallest value.\n// again: Min returns the smallest value.\n",
+		"dup/d.go": "total := total + weight; total := total + weight\n// abab abab abab abab abab abab\n",
 	})
 	exec := contract.Evidence{Kind: contract.EvidenceExecution, Description: "d", Command: "go test", Result: "ok"}
 	cases := []struct {
@@ -118,6 +121,8 @@ func TestPriorMatches(t *testing.T) {
 		{"one match", src("max.go", 9, 9, "// Max returns the largest value."), 1},
 		{"several matches across files", src("max.go", 2, 2, loop), 3},
 		{"two occurrences in one file", src("max.go", 2, 2, "Min returns the smallest value."), 2},
+		{"two occurrences on one line", src("max.go", 1, 1, "total := total + weight"), 2},
+		{"overlapping occurrences on one line", src("max.go", 1, 1, "abab abab abab abab abab"), 2},
 		{"indentation-insensitive", src("max.go", 1, 2, "    m := xs[0]\n\n        "+loop), 1},
 		{"short excerpt", src("max.go", 1, 1, "return m"), -1},
 		{"execution evidence", exec, -1},

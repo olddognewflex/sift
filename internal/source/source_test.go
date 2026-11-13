@@ -379,6 +379,9 @@ func TestHasCommit(t *testing.T) {
 	}
 
 	// Failures to run Git are not reported as a missing commit.
+	if err := HasCommit(ctx, t.TempDir(), head); err == nil || errors.Is(err, ErrMissingCommit) {
+		t.Errorf("not a repository: %v, want a non-ErrMissingCommit error", err)
+	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	if err := HasCommit(cancelled, repo, head); err == nil || errors.Is(err, ErrMissingCommit) {

@@ -287,6 +287,8 @@ func (r Relocation) validate(p *problems, field string) {
 
 func (r VerificationRecord) validate(p *problems, f string) {
 	p.required(f+".finding_id", r.FindingID)
+	p.required(f+".validator", r.Validator)
+	p.required(f+".validator_version", r.ValidatorVersion)
 	// Only established findings are verified (ADR 0006 §8).
 	if r.OriginalState != StateConfirmed && r.OriginalState != StateSupportedRisk {
 		p.add(f+".original_state", "%q is not confirmed or supported_risk", string(r.OriginalState))
