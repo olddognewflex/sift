@@ -1,0 +1,108 @@
+version: 1
+fixture: ledger
+entries:
+  - id: A-D1
+    kind: defect
+    category: correctness
+    title: transfer leaves the debit applied when the credit fails
+    locations: [{path: ledger/transfer.go, start_line: 55, end_line: 60}]
+    anchor: "if err := s.post(to, amount, ref); err != nil {"
+    notes: >-
+      transfer posts the debit to the source and then the credit to the
+      destination as two separate post calls. If the credit fails it
+      returns the error with the debit (and its entry) still applied, so
+      money leaves the source and arrives nowhere. The credit fails
+      deterministically when the destination is closed: transfer looks
+      the destination up with Get, which succeeds for closed accounts,
+      and never checks Closed, while post rejects a closed account with
+      ErrClosed. Transferring to a closed account therefore loses the
+      amount.
+  - id: A-D2
+    kind: defect
+    category: correctness
+    title: Balance check and debit are not atomic, so concurrent transfers can overdraw
+    locations:
+      - {path: ledger/transfer.go, start_line: 40, end_line: 46}
+      - {path: ledger/store.go, start_line: 106, end_line: 117}
+    anchor: "src, err := s.Get(from)"
+    notes: >-
+      transfer reads the source balance through Get, which takes and
+      releases the read lock, and compares it with amount; the debit
+      happens later in post under a separate write lock, which applies
+      the delta without re-checking the balance. Two concurrent transfers
+      from an account holding 100 for 80 each both pass the check and
+      both debit, leaving -60. The Store doc says it is safe for
+      concurrent use and the HTTP server runs handlers concurrently.
+  - id: A-D3
+    kind: defect
+    category: correctness
+    title: Account list slices past the end on the last page
+    locations: [{path: api/handler.go, start_line: 59, end_line: 63}]
+    anchor: "page = accounts[offset : offset+limit]"
+    notes: >-
+      listAccounts guards only offset < len(accounts) and then slices
+      accounts[offset:offset+limit]. Whenever offset+limit exceeds the
+      number of accounts (any last page, or the first page with the
+      default limit of 50 and fewer than 50 accounts) the slice bound is
+      out of range and the handler panics; net/http recovers it and drops
+      the connection instead of returning the page. The upper bound needs
+      min(offset+limit, len(accounts)).
+  - id: A-D4
+    kind: defect
+    category: architecture
+    title: Domain package depends on net/http and returns HTTP statuses
+    locations:
+      - {path: ledger/transfer.go, start_line: 6, end_line: 6}
+      - {path: ledger/transfer.go, start_line: 11, end_line: 31}
+      - {path: api/handler.go, start_line: 79, end_line: 82}
+      - {path: api/handler.go, start_line: 126, end_line: 131}
+    anchor: '"net/http"'
+    notes: >-
+      Package ledger, the domain core, imports net/http; Transfer returns
+      an HTTP status alongside its error and StatusFor maps domain errors
+      to HTTP codes inside the domain. The dependency points the wrong
+      way: the transport layer (package api) should translate domain
+      errors, and any non-HTTP caller (a batch job, a CLI, tests) must
+      now deal in HTTP codes. The api handlers write whatever status the
+      domain chose: ledger.StatusFor(err) on every error path, and
+      writeError(w, status, err) / w.WriteHeader(status) for transfers.
+  - id: A-X1
+    kind: decoy
+    category: correctness
+    title: continuous stops one short of the end of the entries
+    locations: [{path: ledger/statement.go, start_line: 54, end_line: 60}]
+    anchor: "for i := 0; i < len(e)-1; i++ {"
+    notes: >-
+      The loop compares each entry with the next (e[i] and e[i+1]), so
+      i must stop at len(e)-2; the bound i < len(e)-1 does exactly that
+      and the last entry is still checked as e[i+1]. With zero or one
+      entries the loop body never runs (len(e)-1 is -1 or 0, and the
+      index is a signed int), and Statement only calls it when
+      len(e) > 0. No pair is skipped and no index is out of range.
+  - id: A-X2
+    kind: decoy
+    category: correctness
+    title: load reads and writes the accounts map without holding the mutex
+    locations: [{path: ledger/store.go, start_line: 37, end_line: 49}]
+    anchor: "if _, ok := s.accounts[a.ID]; ok {"
+    notes: >-
+      load is unexported and its only caller is NewStore, which calls it
+      on a Store it has just allocated and not yet returned, so no other
+      goroutine can hold a reference to the map. Every method reachable
+      after construction (Get, List, Open, Close, post, Statement) takes
+      s.mu. There is no concurrent access to race with.
+  - id: A-X3
+    kind: decoy
+    category: architecture
+    title: Clock interface has a single production implementation
+    locations:
+      - {path: ledger/clock.go, start_line: 5, end_line: 8}
+      - {path: ledger/ledger_test.go, start_line: 10, end_line: 15}
+    anchor: "type Clock interface {"
+    notes: >-
+      systemClock is the only implementation outside tests, but the
+      interface exists so time can be substituted: ledger_test.go defines
+      fakeClock, passes it to NewStore, advances it between transfers,
+      and asserts the exact timestamps on statement entries in
+      TestStatement. That is a present substitution need, so this is not
+      speculative abstraction.
