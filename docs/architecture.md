@@ -11,6 +11,7 @@ sift audit <path>
   ├─ probe harness ──────────────── fail before creating a run if unusable
   ├─ inspect repository (git) ───── commit, branch, porcelain status
   ├─ apply dirty policy ─────────── refuse | head | include      (ADR 0001)
+  ├─ estimate cost ──────────────── internal/cost; Preflight may refuse (ADR 0007)
   ├─ create run dir (outside repo), archive agent definitions
   ├─ export read-only snapshot ──── <run>/source, digest, diff
   │
@@ -44,7 +45,8 @@ each decision is saved as soon as it is made. The report always runs.
 | `internal/config` | YAML config: defaults, strict parsing, validation, `sift init` template |
 | `internal/contract` | Versioned artifact types, strict decoding, validation. The single source of truth |
 | `internal/schema` | JSON Schema generation from contract types (for harness and `schemas/`), and validation for harnesses without native schema support |
-| `internal/source` | Git inspection, snapshot export, dirty-tree policy, repository fingerprint |
+| `internal/source` | Git inspection, snapshot export and file count, dirty-tree policy, repository fingerprint |
+| `internal/cost` | Pure pre-run cost model shared by audit, verify, and benchmark: estimate, budget check, display lines (ADR 0007) |
 | `internal/storage` | Run directories, atomic artifact writes, run lookup |
 | `internal/agent` | Agent definition loading (embedded `agents/*.md` or override dir) |
 | `internal/harness` | Harness interface, request/result, typed errors |
@@ -187,8 +189,14 @@ reviewer draft ──► candidate ──(Pruv + gate)──► confirmed | supp
   means every input (snapshot, digest, config, agent versions, harness
   version, prompts) and every output is recorded, so a result can be
   examined and re-checked.
-- **Cost scales with findings:** one Pruv execution per finding. This is
-  bounded by `max_findings_per_reviewer` and `max_budget_usd`.
+- **Cost scales with findings and files:** one Pruv execution per finding,
+  and reviewer cost grows with the snapshot. Before a run is created, Sift
+  estimates its cost from configured rates (`internal/cost`, ADR 0007) and
+  records the estimate and the actual reported spend in the manifest's
+  `cost` field. The rates are guesses until calibrated against those
+  records, and retries are not modelled. The number of Pruv executions is
+  bounded by `max_findings_per_reviewer`; each execution by
+  `agents.max_budget_usd` (not enforceable on Kiro, ADR 0005).
 - **Not implemented yet:** additional reviewers (performance, security,
   …), resuming an interrupted run, `sift verify`, and execution evidence
   (would need a sandboxed command policy).

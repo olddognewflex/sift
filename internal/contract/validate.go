@@ -413,7 +413,76 @@ func (m Manifest) Validate() error {
 	if m.Verifies != nil {
 		m.Verifies.validate(&p)
 	}
+	if m.Cost != nil {
+		m.Cost.validate(&p, "cost")
+	}
 	return p.err()
+}
+
+func (c RunCost) validate(p *problems, field string) {
+	e, a := c.Estimate, c.Actual
+	switch e.Kind {
+	case "audit", "verify", "total":
+	default:
+		p.add(field+".estimate.kind", "%q is not one of [audit verify total]", e.Kind)
+	}
+	p.required(field+".estimate.model", e.Model)
+	nonNegative := func(name string, v float64) {
+		if v < 0 {
+			p.add(field+"."+name, "must not be negative")
+		}
+	}
+	for _, n := range []struct {
+		name string
+		v    int
+	}{
+		{"estimate.files", e.Files}, {"estimate.reviewers", e.Reviewers},
+		{"estimate.pruv_calls_low", e.PruvCallsLow}, {"estimate.pruv_calls_high", e.PruvCallsHigh},
+		{"actual.executions", a.Executions}, {"actual.reported_executions", a.ReportedExecutions},
+		{"actual.pruv_executions", a.PruvExecutions}, {"actual.candidates", a.Candidates},
+	} {
+		nonNegative(n.name, float64(n.v))
+	}
+	for _, n := range []struct {
+		name string
+		v    float64
+	}{
+		{"estimate.rates.discovery_usd", e.Rates.DiscoveryUSD}, {"estimate.rates.file_review_usd", e.Rates.FileReviewUSD},
+		{"estimate.rates.pruv_call_usd", e.Rates.PruvCallUSD}, {"estimate.discovery_usd", e.DiscoveryUSD},
+		{"estimate.reviewers_usd", e.ReviewersUSD}, {"estimate.pruv_low_usd", e.PruvLowUSD},
+		{"estimate.pruv_high_usd", e.PruvHighUSD}, {"estimate.low_usd", e.LowUSD}, {"estimate.high_usd", e.HighUSD},
+		{"budget_usd", c.BudgetUSD}, {"actual.usd", a.USD},
+	} {
+		nonNegative(n.name, n.v)
+	}
+	if e.PruvCallsLow > e.PruvCallsHigh {
+		p.add(field+".estimate", "pruv_calls_low %d exceeds pruv_calls_high %d", e.PruvCallsLow, e.PruvCallsHigh)
+	}
+	if e.LowUSD > e.HighUSD {
+		p.add(field+".estimate", "low_usd %.2f exceeds high_usd %.2f", e.LowUSD, e.HighUSD)
+	}
+	checkEnum(p, field+".approval", c.Approval)
+	// The approval must match the budget check it records (the same rule
+	// as cost.OverBudget, inlined: internal/cost imports this package).
+	// unchecked fits any state.
+	over := c.BudgetUSD > 0 && e.HighUSD > c.BudgetUSD
+	switch c.Approval {
+	case ApprovalNoBudget:
+		if c.BudgetUSD != 0 {
+			p.add(field+".approval", "no_budget requires budget_usd 0, got %.2f", c.BudgetUSD)
+		}
+	case ApprovalWithinBudget:
+		if c.BudgetUSD == 0 || over {
+			p.add(field+".approval", "within_budget requires a budget the high estimate does not exceed")
+		}
+	case ApprovalYesFlag, ApprovalPrompt:
+		if !over {
+			p.add(field+".approval", "%s is only recorded when the high estimate exceeds the budget", c.Approval)
+		}
+	}
+	if a.ReportedExecutions > a.Executions || a.PruvExecutions > a.Executions {
+		p.add(field+".actual", "reported_executions and pruv_executions cannot exceed executions")
+	}
 }
 
 func (r ReportMeta) Validate() error {

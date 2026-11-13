@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/olddognewflex/sift/internal/config"
 	"github.com/olddognewflex/sift/internal/contract"
+	"github.com/olddognewflex/sift/internal/cost"
 	"github.com/olddognewflex/sift/internal/harness"
 	"github.com/olddognewflex/sift/internal/harness/fake"
 	"github.com/olddognewflex/sift/internal/report"
@@ -641,5 +644,213 @@ func TestHarnessWarningsAreRecorded(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestManifestRecordsCostEstimateAndActual(t *testing.T) {
+	e := newEnv(t)
+	res, err := e.run(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.Manifest
+	c := m.Cost
+	if c == nil {
+		t.Fatal("manifest has no cost record")
+	}
+	// The fake harness does not advertise budget-limit, so nothing is capped.
+	want := cost.ForAudit(e.cfg, m.Repository.SnapshotFiles, false)
+	if !reflect.DeepEqual(c.Estimate, want) {
+		t.Errorf("estimate = %+v\nwant %+v", c.Estimate, want)
+	}
+	if c.Estimate.Files != m.Repository.SnapshotFiles || c.Estimate.Reviewers != 2 || c.Estimate.PruvCallsLow != 8 ||
+		c.Estimate.PruvCallsHigh != 16 || c.Estimate.HarnessEnforcesBudget {
+		t.Errorf("estimate inputs = %+v", c.Estimate)
+	}
+	if c.BudgetUSD != e.cfg.Cost.BudgetUSD || c.Approval != contract.ApprovalWithinBudget {
+		t.Errorf("budget %v, approval %s", c.BudgetUSD, c.Approval)
+	}
+	// 1 discovery + 2 reviews + 4 Pruv executions at the fake's $0.01 each.
+	a := c.Actual
+	if a.Executions != 7 || a.ReportedExecutions != 7 || a.PruvExecutions != 4 || a.Candidates != 4 || math.Abs(a.USD-0.07) > 1e-9 {
+		t.Errorf("actual = %+v", a)
+	}
+	var saved contract.Manifest
+	if err := res.Run.ReadJSON(storage.ManifestFile, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Cost == nil || !reflect.DeepEqual(*saved.Cost, *c) {
+		t.Errorf("saved cost = %+v, want %+v", saved.Cost, c)
+	}
+}
+
+// overBudget sets a budget below the fixture's estimate (high ≈ $5.4).
+func overBudget(e *env) { e.cfg.Cost.BudgetUSD = 1 }
+
+func TestPreflightApprovalIsRecorded(t *testing.T) {
+	for _, approval := range []contract.CostApproval{contract.ApprovalYesFlag, contract.ApprovalPrompt} {
+		t.Run(string(approval), func(t *testing.T) {
+			e := newEnv(t)
+			overBudget(e)
+			var seen contract.CostEstimate
+			res, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: e.h, Store: e.store, SiftVersion: "test",
+				Preflight: func(_ context.Context, est contract.CostEstimate) (contract.CostApproval, error) {
+					if len(e.h.Calls()) != 0 {
+						t.Error("preflight must run before any agent")
+					}
+					if ids, _ := e.store.List(); len(ids) != 0 {
+						t.Errorf("preflight must run before the run is created: %v", ids)
+					}
+					seen = est
+					return approval, nil
+				}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c := res.Manifest.Cost; c.Approval != approval || c.BudgetUSD != 1 || !reflect.DeepEqual(c.Estimate, seen) {
+				t.Errorf("cost = %+v, preflight saw %+v", c, seen)
+			}
+		})
+	}
+}
+
+func TestPreflightOnlyCalledOverBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget float64
+		want   contract.CostApproval
+	}{
+		{"within budget", 100, contract.ApprovalWithinBudget},
+		{"no budget", 0, contract.ApprovalNoBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.cfg.Cost.BudgetUSD = tc.budget
+			res, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: e.h, Store: e.store, SiftVersion: "test",
+				Preflight: func(context.Context, contract.CostEstimate) (contract.CostApproval, error) {
+					t.Error("preflight must not be called when the estimate is within the budget")
+					return contract.ApprovalYesFlag, nil
+				}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := res.Manifest.Cost.Approval; got != tc.want {
+				t.Errorf("approval = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOverBudgetWithoutPreflightIsUnchecked(t *testing.T) {
+	e := newEnv(t)
+	overBudget(e)
+	res, err := e.run(t, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Manifest.Cost.Approval; got != contract.ApprovalUnchecked {
+		t.Errorf("approval = %s, want unchecked (no gate wired)", got)
+	}
+}
+
+func TestPreflightErrorCreatesNoRun(t *testing.T) {
+	e := newEnv(t)
+	overBudget(e)
+	refused := errors.New("over budget")
+	res, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: e.h, Store: e.store, SiftVersion: "test",
+		Preflight: func(context.Context, contract.CostEstimate) (contract.CostApproval, error) {
+			return "", refused
+		}})
+	if !errors.Is(err, refused) || res != nil {
+		t.Fatalf("got %v, %v; want no run and the preflight error", res, err)
+	}
+	if ids, _ := e.store.List(); len(ids) != 0 {
+		t.Fatalf("runs created: %v", ids)
+	}
+	if n := len(e.h.Calls()); n != 0 {
+		t.Fatalf("harness ran %d agent(s)", n)
+	}
+}
+
+func TestPreflightInvalidApprovalCreatesNoRun(t *testing.T) {
+	// Only yes_flag and prompt can approve an over-budget run.
+	for _, approval := range []contract.CostApproval{contract.ApprovalWithinBudget, contract.ApprovalNoBudget, contract.ApprovalUnchecked, "", "sure"} {
+		t.Run(string(approval), func(t *testing.T) {
+			e := newEnv(t)
+			overBudget(e)
+			_, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: e.h, Store: e.store, SiftVersion: "test",
+				Preflight: func(context.Context, contract.CostEstimate) (contract.CostApproval, error) { return approval, nil }})
+			if err == nil || !strings.Contains(err.Error(), "over-budget run") {
+				t.Fatalf("err = %v", err)
+			}
+			if ids, _ := e.store.List(); len(ids) != 0 {
+				t.Fatalf("runs created: %v", ids)
+			}
+			if n := len(e.h.Calls()); n != 0 {
+				t.Fatalf("harness ran %d agent(s)", n)
+			}
+		})
+	}
+}
+
+func TestEnforcingHarnessCapsEstimate(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Agents.MaxBudgetUSD = 0.10
+	h := budgetHarness{e.h}
+	res, err := Run(context.Background(), Options{RepoPath: e.repo, Config: e.cfg, Harness: h, Store: e.store, SiftVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	est := res.Manifest.Cost.Estimate
+	if !est.HarnessEnforcesBudget || !reflect.DeepEqual(est, cost.ForAudit(e.cfg, res.Manifest.Repository.SnapshotFiles, true)) {
+		t.Errorf("estimate = %+v", est)
+	}
+	if uncapped := cost.ForAudit(e.cfg, est.Files, false); est.HighUSD >= uncapped.HighUSD {
+		t.Errorf("capped high %v should be below uncapped %v", est.HighUSD, uncapped.HighUSD)
+	}
+}
+
+// budgetHarness advertises the budget-limit capability.
+type budgetHarness struct{ *fake.Harness }
+
+func (h budgetHarness) Probe(ctx context.Context) (harness.Info, error) {
+	info, err := h.Harness.Probe(ctx)
+	info.Capabilities = append(info.Capabilities, harness.CapBudgetLimit)
+	return info, err
+}
+
+func TestInterruptedRunKeepsPartialActualCost(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Audit.MaxParallelAgents = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.Before = func(ctx context.Context, req harness.Request) error {
+		if req.Agent == "pruv" && testutil.FindingID(req) == "CORR-002" {
+			cancel()
+			return &harness.Error{Kind: harness.ErrCanceled, Msg: "canceled", Err: ctx.Err()}
+		}
+		return nil
+	}
+	res, err := e.run(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.Manifest
+	if m.Status != contract.RunInterrupted {
+		t.Fatalf("status = %s", m.Status)
+	}
+	// discovery, 2 reviews, Pruv on ARCH-001 and CORR-001 report $0.01
+	// each; the canceled Pruv on CORR-002 is counted but reports nothing.
+	var recorded int
+	for _, task := range m.Tasks {
+		recorded += len(task.Executions)
+	}
+	a := m.Cost.Actual
+	if a.Executions != 6 || a.Executions != recorded || a.ReportedExecutions != 5 || a.PruvExecutions != 3 || a.Candidates != 4 || math.Abs(a.USD-0.05) > 1e-9 {
+		t.Errorf("actual = %+v (manifest lists %d executions)", a, recorded)
+	}
+	var saved contract.Manifest
+	if err := res.Run.ReadJSON(storage.ManifestFile, &saved); err != nil || saved.Cost == nil || saved.Cost.Actual != a {
+		t.Errorf("saved actual = %+v, %v", saved.Cost, err)
 	}
 }

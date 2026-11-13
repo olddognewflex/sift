@@ -170,6 +170,43 @@ func Export(ctx context.Context, st State, policy contract.DirtyPolicy, dest str
 	return snap, nil
 }
 
+// CountFiles returns how many files Export would write for st under
+// policy, without writing anything. It lists and filters paths exactly as
+// Export does (symlinks, submodules, unsafe paths, and paths sharing one
+// on-disk file are not counted), so the two cannot drift. It can still
+// exceed Export's count by paths that only collide once written, such as
+// README.md and readme.md in a commit exported to a case-insensitive
+// filesystem: that depends on the destination and is only known by
+// writing.
+func CountFiles(ctx context.Context, st State, policy contract.DirtyPolicy) (int, error) {
+	if st.Dirty() && policy == contract.DirtyRefuse {
+		return 0, DirtyError(st)
+	}
+	n := 0
+	if st.Dirty() && policy == contract.DirtyInclude {
+		entries, err := listWorkingTree(ctx, st.Root)
+		if err != nil {
+			return 0, err
+		}
+		for _, e := range entries {
+			if e.skip == "" && contract.ValidRelPath(e.rel) {
+				n++
+			}
+		}
+		return n, nil
+	}
+	blobs, _, err := listCommit(ctx, st.Root, st.Commit)
+	if err != nil {
+		return 0, err
+	}
+	for _, b := range blobs {
+		if contract.ValidRelPath(b.path) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // DirtyError explains a refused dirty working tree and how to proceed.
 func DirtyError(st State) error {
 	return fmt.Errorf("%w (%d path(s), e.g. %q); commit or stash them, or rerun with --dirty=head (audit %s only) or --dirty=include (audit the working tree as it is)",
@@ -269,29 +306,12 @@ func (w *writer) digest() string {
 // database. (git archive is avoided because export-ignore and export-subst
 // attributes would alter the audited content.)
 func (w *writer) exportCommit(ctx context.Context, root, commit string) error {
-	tree, err := git(ctx, root, "ls-tree", "-r", "-z", "--full-tree", commit)
+	blobs, skipped, err := listCommit(ctx, root, commit)
 	if err != nil {
 		return err
 	}
-	type blob struct{ oid, path string }
-	var blobs []blob
-	for _, e := range strings.Split(string(tree), "\x00") {
-		if e == "" {
-			continue
-		}
-		meta, path, ok := strings.Cut(e, "\t")
-		f := strings.Fields(meta)
-		if !ok || len(f) != 3 {
-			return fmt.Errorf("unexpected ls-tree entry %q", e)
-		}
-		switch {
-		case f[0] == "120000":
-			w.skip(path, "symlink")
-		case f[1] == "commit":
-			w.skip(path, "submodule")
-		case f[1] == "blob":
-			blobs = append(blobs, blob{f[2], path})
-		}
+	for _, s := range skipped {
+		w.skip(s.path, s.why)
 	}
 	if len(blobs) == 0 {
 		return nil
@@ -329,6 +349,41 @@ func (w *writer) exportCommit(ctx context.Context, root, commit string) error {
 	return nil
 }
 
+type treeBlob struct{ oid, path string }
+
+type skippedPath struct{ path, why string }
+
+// listCommit lists the regular-file blobs of commit, in tree order, and the
+// entries that are not exported (symlinks and submodules). It is shared by
+// Export and CountFiles.
+func listCommit(ctx context.Context, root, commit string) ([]treeBlob, []skippedPath, error) {
+	tree, err := git(ctx, root, "ls-tree", "-r", "-z", "--full-tree", commit)
+	if err != nil {
+		return nil, nil, err
+	}
+	var blobs []treeBlob
+	var skipped []skippedPath
+	for _, e := range strings.Split(string(tree), "\x00") {
+		if e == "" {
+			continue
+		}
+		meta, path, ok := strings.Cut(e, "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 {
+			return nil, nil, fmt.Errorf("unexpected ls-tree entry %q", e)
+		}
+		switch {
+		case f[0] == "120000":
+			skipped = append(skipped, skippedPath{path, "symlink"})
+		case f[1] == "commit":
+			skipped = append(skipped, skippedPath{path, "submodule"})
+		case f[1] == "blob":
+			blobs = append(blobs, treeBlob{f[2], path})
+		}
+	}
+	return blobs, skipped, nil
+}
+
 func readBatchObject(r *bufio.Reader) ([]byte, error) {
 	header, err := r.ReadString('\n')
 	if err != nil {
@@ -354,13 +409,43 @@ const ambiguous = "resolves to the same file as another listed path, e.g. on a c
 // exportWorkingTree copies tracked and untracked, non-ignored files as they
 // exist on disk.
 func (w *writer) exportWorkingTree(ctx context.Context, root string) error {
-	cached, err := git(ctx, root, "ls-files", "-z", "--cached", "--deduplicate")
+	entries, err := listWorkingTree(ctx, root)
 	if err != nil {
 		return err
 	}
+	for _, e := range entries {
+		if e.skip != "" {
+			w.skip(e.rel, e.skip)
+			continue
+		}
+		data, err := os.ReadFile(e.full)
+		if err != nil {
+			return err
+		}
+		if err := w.write(e.rel, data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// treeEntry is a working-tree path to export, or to skip when skip is set.
+type treeEntry struct {
+	rel, full, skip string
+	tracked         bool
+}
+
+// listWorkingTree lists tracked and untracked, non-ignored paths that exist
+// on disk, marking those that are not exported. It is shared by Export and
+// CountFiles.
+func listWorkingTree(ctx context.Context, root string) ([]treeEntry, error) {
+	cached, err := git(ctx, root, "ls-files", "-z", "--cached", "--deduplicate")
+	if err != nil {
+		return nil, err
+	}
 	others, err := git(ctx, root, "ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	type listed struct {
 		rel     string
@@ -373,24 +458,20 @@ func (w *writer) exportWorkingTree(ctx context.Context, root string) error {
 	for _, rel := range strings.Split(string(others), "\x00") {
 		list = append(list, listed{rel, false})
 	}
-	type entry struct {
-		rel, full, skip string
-		tracked         bool
-	}
-	var entries []entry
+	var entries []treeEntry
 	var regular []os.FileInfo
 	var at []int // index in entries of each regular file
 	for _, l := range list {
 		if l.rel == "" {
 			continue
 		}
-		e := entry{rel: l.rel, full: filepath.Join(root, filepath.FromSlash(l.rel)), tracked: l.tracked}
+		e := treeEntry{rel: l.rel, full: filepath.Join(root, filepath.FromSlash(l.rel)), tracked: l.tracked}
 		fi, err := os.Lstat(e.full)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			continue // deleted in the working tree
 		case err != nil:
-			return err
+			return nil, err
 		case fi.Mode()&os.ModeSymlink != 0:
 			e.skip = "symlink"
 		case fi.IsDir():
@@ -412,7 +493,7 @@ func (w *writer) exportWorkingTree(ctx context.Context, root string) error {
 	// path-based check would miss aliases such as NFC/NFD spellings on APFS,
 	// and Git never checks out hard links.
 	for _, g := range sameFileGroups(regular) {
-		var tracked []*entry
+		var tracked []*treeEntry
 		for _, i := range g {
 			if e := &entries[at[i]]; e.tracked {
 				tracked = append(tracked, e)
@@ -427,20 +508,7 @@ func (w *writer) exportWorkingTree(ctx context.Context, root string) error {
 			}
 		}
 	}
-	for _, e := range entries {
-		if e.skip != "" {
-			w.skip(e.rel, e.skip)
-			continue
-		}
-		data, err := os.ReadFile(e.full)
-		if err != nil {
-			return err
-		}
-		if err := w.write(e.rel, data); err != nil {
-			return err
-		}
-	}
-	return nil
+	return entries, nil
 }
 
 // sameFileGroups returns, as indexes into files, each set of two or more

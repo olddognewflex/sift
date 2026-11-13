@@ -25,6 +25,10 @@ type Harness interface {
 	Run(ctx context.Context, req Request) (Result, error)
 }
 
+// CapBudgetLimit is the capability of a harness that enforces
+// Request.MaxBudgetUSD, stopping an execution at that spend.
+const CapBudgetLimit = "budget-limit"
+
 // Info identifies a harness installation.
 type Info struct {
 	Name         string

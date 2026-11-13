@@ -458,3 +458,102 @@ func TestReportMetaOutcomeCounts(t *testing.T) {
 		t.Error("an unknown outcome must be invalid")
 	}
 }
+
+func costManifest() Manifest {
+	return Manifest{Header: NewHeader(KindManifest, "r"), Status: RunCompleted,
+		Repository: Repository{Path: "/r", Commit: "c", SourceRevision: "c", DirtyPolicy: DirtyRefuse},
+		Config:     json.RawMessage(`{}`),
+		Cost: &RunCost{
+			Estimate: CostEstimate{Kind: "audit", Model: "m/v1", Files: 42, Reviewers: 2, PruvCallsLow: 8, PruvCallsHigh: 16,
+				Rates:        CostRates{DiscoveryUSD: 0.5, FileReviewUSD: 0.02, PruvCallUSD: 0.3},
+				DiscoveryUSD: 0.5, ReviewersUSD: 1.68, PruvLowUSD: 2.4, PruvHighUSD: 4.8, LowUSD: 4.58, HighUSD: 6.98},
+			BudgetUSD: 10, Approval: ApprovalWithinBudget,
+			Actual: CostActual{USD: 0.07, Executions: 7, ReportedExecutions: 7, PruvExecutions: 4, Candidates: 4},
+		}}
+}
+
+func TestManifestCostRoundTrip(t *testing.T) {
+	m := costManifest()
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"cost":{"estimate":{`, `"harness_enforces_budget":false`, `"approval":"within_budget"`, `"reported_executions":7`} {
+		if !strings.Contains(string(data), k) {
+			t.Errorf("encoding lacks %s: %s", k, data)
+		}
+	}
+	var back Manifest
+	if err := Decode(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Cost == nil || *back.Cost != *m.Cost {
+		t.Errorf("round trip = %+v, want %+v", back.Cost, m.Cost)
+	}
+
+	// Runs recorded before cost estimates existed have no cost.
+	m.Cost = nil
+	data, _ = json.Marshal(m)
+	if strings.Contains(string(data), `"cost"`) {
+		t.Fatalf("nil cost must be omitted: %s", data)
+	}
+	var legacy Manifest
+	if err := Decode(data, &legacy); err != nil || legacy.Cost != nil {
+		t.Errorf("manifest without cost: %+v, %v", legacy.Cost, err)
+	}
+}
+
+func TestManifestCostValidation(t *testing.T) {
+	for name, mutate := range map[string]func(*RunCost){
+		"low above high":        func(c *RunCost) { c.Estimate.LowUSD = 7 },
+		"bad approval":          func(c *RunCost) { c.Approval = "maybe" },
+		"empty approval":        func(c *RunCost) { c.Approval = "" },
+		"no model":              func(c *RunCost) { c.Estimate.Model = "" },
+		"negative low":          func(c *RunCost) { c.Estimate.LowUSD = -1 },
+		"negative budget":       func(c *RunCost) { c.BudgetUSD = -1 },
+		"negative rate":         func(c *RunCost) { c.Estimate.Rates.PruvCallUSD = -0.3 },
+		"negative files":        func(c *RunCost) { c.Estimate.Files = -1 },
+		"calls low above high":  func(c *RunCost) { c.Estimate.PruvCallsLow = 17 },
+		"negative actual usd":   func(c *RunCost) { c.Actual.USD = -0.01 },
+		"negative candidates":   func(c *RunCost) { c.Actual.Candidates = -1 },
+		"reported above total":  func(c *RunCost) { c.Actual.ReportedExecutions = 8 },
+		"pruv above total":      func(c *RunCost) { c.Actual.PruvExecutions = 8 },
+		"unknown kind":          func(c *RunCost) { c.Estimate.Kind = "benchmark" },
+		"empty kind":            func(c *RunCost) { c.Estimate.Kind = "" },
+		"negative high":         func(c *RunCost) { c.Estimate.LowUSD, c.Estimate.HighUSD = -2, -1 },
+		"no_budget with budget": func(c *RunCost) { c.Approval = ApprovalNoBudget },
+		"within without budget": func(c *RunCost) { c.BudgetUSD = 0 },
+		"within but over":       func(c *RunCost) { c.BudgetUSD = 5 },
+		"yes_flag within":       func(c *RunCost) { c.Approval = ApprovalYesFlag },
+		"prompt within":         func(c *RunCost) { c.Approval = ApprovalPrompt },
+		"yes_flag no budget":    func(c *RunCost) { c.Approval, c.BudgetUSD = ApprovalYesFlag, 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := costManifest()
+			mutate(m.Cost)
+			if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "cost.") {
+				t.Fatalf("expected a cost validation error, got %v", err)
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*RunCost){
+		"low == high":         func(c *RunCost) { c.Estimate.LowUSD, c.Estimate.HighUSD = 1.5, 1.5 },
+		"high == budget":      func(c *RunCost) { c.BudgetUSD = 6.98 },
+		"no_budget":           func(c *RunCost) { c.Approval, c.BudgetUSD = ApprovalNoBudget, 0 },
+		"yes_flag over":       func(c *RunCost) { c.Approval, c.BudgetUSD = ApprovalYesFlag, 5 },
+		"prompt over":         func(c *RunCost) { c.Approval, c.BudgetUSD = ApprovalPrompt, 5 },
+		"unchecked over":      func(c *RunCost) { c.Approval, c.BudgetUSD = ApprovalUnchecked, 5 },
+		"unchecked within":    func(c *RunCost) { c.Approval = ApprovalUnchecked },
+		"unchecked no budget": func(c *RunCost) { c.Approval, c.BudgetUSD = ApprovalUnchecked, 0 },
+		"verify kind":         func(c *RunCost) { c.Estimate.Kind = "verify" },
+		"total kind":          func(c *RunCost) { c.Estimate.Kind = "total" },
+	} {
+		t.Run("valid "+name, func(t *testing.T) {
+			m := costManifest()
+			mutate(m.Cost)
+			if err := m.Validate(); err != nil {
+				t.Errorf("expected valid: %v", err)
+			}
+		})
+	}
+}
