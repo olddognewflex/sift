@@ -324,9 +324,10 @@ agents:
 
 cost:
   # Whole-run budget in USD for the cost estimate Sift makes before any
-  # agent runs. A run whose high estimate exceeds it needs confirmation
-  # (asked on a terminal, --yes otherwise). 0 disables the check. This is
-  # separate from agents.max_budget_usd, which caps one agent execution.
+  # agent runs. The CLI does not yet stop or prompt when an audit exceeds
+  # it; until that gate lands, the run proceeds and records "unchecked".
+  # 0 disables the check. This is separate from agents.max_budget_usd,
+  # which caps one agent execution.
   # The default never stops a claude-code run at default settings, whose
   # per-execution caps bound the estimate at $11.30.
   budget_usd: 15
