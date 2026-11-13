@@ -48,6 +48,34 @@ anchors work on the raw bytes.
 `internal/bench/testdata/selftest/` is a minimal fixture used by offline
 tests. It is not part of the benchmark.
 
+## Fixtures
+
+The benchmark fixtures live in `internal/bench/testdata/fixtures/`. Each
+is a small, self-contained project of about ten files. Their keys are the
+source of truth for what each one plants.
+
+| Fixture | Language | Description | Defects | Decoys |
+|---|---|---|---|---|
+| `ledger` | Go | In-memory accounts ledger: domain package, HTTP API, server command, tests | 4 (3 correctness, 1 architecture) | 3 (2 correctness, 1 architecture) |
+| `invoicer` | Python | SQLite-backed invoicing CLI: models, tax, repository, reports, tests | 4 (3 correctness, 1 architecture) | 2 (1 correctness, 1 architecture) |
+| `jobrunner` | TypeScript | In-process job queue with retries and an Express API | 4 (2 correctness, 2 architecture) | 3 (2 correctness, 1 architecture) |
+
+In total there are 12 defects and 8 decoys, plus one `known` entry in
+`invoicer`. `fixtures_test.go` checks offline that every key loads against
+its source, that every reviewer category has at least one defect and one
+decoy, and these totals. It also checks that `ledger` passes `go vet` and,
+when `python3` or `tsc` is on the PATH, that `invoicer` compiles and
+`jobrunner` type-checks. The `jobrunner` check supplies minimal Express and
+Node declarations, since the fixture's dependencies are not installed.
+
+Known adjacency: two pairs of entries sit close enough that a finding
+about one can be credited to the other. In `ledger`, A-D2's balance check
+(`transfer.go` 40-46) and A-D1's debit and credit (55-60) are in one
+function, so a race finding that cites the debit call matches A-D1. In
+`invoicer`, B-D2's effect shows in the unpaid count in `summarize`
+(`reports.py` 34), inside B-D3's window. When triaging results, check
+matches on these entries for cross-credit.
+
 ## Answer key
 
 ```yaml

@@ -1,0 +1,109 @@
+version: 1
+fixture: invoicer
+entries:
+  - id: B-D1
+    kind: defect
+    category: correctness
+    title: Invoice uses a mutable default list, so invoices share their lines
+    locations:
+      - {path: invoicer/models.py, start_line: 37, end_line: 48}
+      - {path: invoicer/cli.py, start_line: 41, end_line: 43}
+    anchor: "lines: list[Line] = [],"
+    notes: >-
+      The default [] for lines is evaluated once, when the function is
+      defined, and __init__ stores it directly (self.lines = lines);
+      add_line appends to it. Every Invoice created without an explicit
+      lines argument shares one list. cmd_import builds each invoice that
+      way and then calls add_line, so after importing a CSV every
+      imported invoice holds the lines of all of them, and each is saved
+      with the wrong lines and totals. Invoices loaded by the repository
+      pass lines explicitly and are not affected.
+  - id: B-D2
+    kind: defect
+    category: correctness
+    title: is_paid compares float amounts for exact equality
+    locations: [{path: invoicer/models.py, start_line: 67, end_line: 68}]
+    anchor: "return self.amount_paid == self.total()"
+    notes: >-
+      total() is a float sum of line prices plus rounded tax, and
+      amount_paid is a float parsed from the command line. Sums such as
+      100.10 + 19.02 give 119.11999999999999, so paying the printed total
+      of 119.12 leaves is_paid() false: cmd_pay reports a tiny balance
+      due and summarize counts the invoice as unpaid. Overpayment is also
+      reported as unpaid. A tolerance (or integer cents / Decimal) and >=
+      are needed.
+  - id: B-D3
+    kind: defect
+    category: correctness
+    title: summarize divides by zero for an empty set of invoices
+    locations:
+      - {path: invoicer/reports.py, start_line: 31, end_line: 36}
+      - {path: invoicer/cli.py, start_line: 68, end_line: 72}
+    anchor: "average=round(invoiced / len(invoices), 2),"
+    notes: >-
+      summarize computes invoiced / len(invoices) with no guard.
+      cmd_summary passes repo.list_by_month(args.month), which returns []
+      for any month without invoices (and list_all returns [] on a new
+      database), so `summary --month 2024-04` crashes with
+      ZeroDivisionError instead of printing a zero summary.
+  - id: B-D4
+    kind: defect
+    category: architecture
+    title: reports.py queries the database directly, bypassing the repository
+    locations:
+      - {path: invoicer/reports.py, start_line: 52, end_line: 60}
+      - {path: invoicer/cli.py, start_line: 90, end_line: 90}
+      - {path: invoicer/repository.py, start_line: 10, end_line: 26}
+    anchor: "def top_customers(conn: sqlite3.Connection, limit: int = 10)"
+    notes: >-
+      InvoiceRepository owns the schema (SCHEMA in repository.py) and is
+      otherwise the only module that talks to SQLite, but top_customers
+      takes a raw sqlite3 connection and hard-codes table and column
+      names (invoices.customer, invoices.number, lines.invoice,
+      lines.price), and cmd_top reaches into repo.conn to call it. Schema
+      knowledge is duplicated across modules, so a schema change in
+      repository.py silently breaks the report, and the report layer is
+      coupled to the storage engine. The query belongs in the repository.
+  - id: B-X1
+    kind: decoy
+    category: correctness
+    title: line_rows divides by line.quantity without a zero check
+    locations: [{path: invoicer/reports.py, start_line: 22, end_line: 24}]
+    anchor: "round(line.price / line.quantity, 2)"
+    notes: >-
+      Line is a frozen dataclass whose __post_init__ raises ValueError
+      when quantity <= 0, and every Line is built through that
+      constructor (cmd_import, InvoiceRepository._invoice). Frozen
+      instances cannot be mutated afterwards, so line.quantity is always
+      a positive int and the division cannot raise.
+  - id: B-X2
+    kind: decoy
+    category: architecture
+    title: tax and models import each other circularly
+    locations:
+      - {path: invoicer/tax.py, start_line: 5, end_line: 8}
+      - {path: invoicer/models.py, start_line: 8, end_line: 8}
+    anchor: "if TYPE_CHECKING:"
+    notes: >-
+      models.py imports tax at runtime, but tax.py imports Invoice only
+      inside `if TYPE_CHECKING:`, which is false at runtime, and uses it
+      only in an annotation (deferred by `from __future__ import
+      annotations`). At runtime tax depends on nothing in the package, so
+      there is no import cycle; tax_for only needs an object with
+      subtotal() and region. This is the standard pattern for type-only
+      imports. The remaining type-level reference is not coupling worth a
+      finding either: the annotation documents what tax_for is given, and
+      tax_for relies only on that structure (subtotal() and region), not
+      on the Invoice class, its construction or its module.
+  - id: B-K1
+    kind: known
+    category: correctness
+    title: Tax is rounded with float round(), which can be a cent off
+    locations: [{path: invoicer/tax.py, start_line: 32, end_line: 34}]
+    anchor: "return round(invoice.subtotal() * rate_for(invoice.region), 2)"
+    notes: >-
+      Not planted, but real and a side effect of the float money model
+      that B-D2 relies on. round() works on the binary approximation of
+      the product, so an amount that should end in an exact half cent can
+      round down: 2.50 * 0.19 = 0.475 gives 0.47, not 0.48. Tax can be one
+      cent off. Recorded so a finding here is neutral rather than unkeyed.
