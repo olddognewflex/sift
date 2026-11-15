@@ -1,7 +1,8 @@
 // Package bench scores Sift's findings against benchmark answer keys: fixture
 // repositories with planted defects and decoys (docs/benchmark.md, ADR 0008).
-// Everything here is offline and deterministic; the live driver that runs
-// audits over the fixtures builds on it.
+// Scoring is offline and deterministic. The live driver (Run) audits the
+// fixtures within a budget, and results files keep each run's observations
+// so they can be rescored and compared with a baseline.
 package bench
 
 import (

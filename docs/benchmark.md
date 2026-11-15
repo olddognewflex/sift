@@ -19,7 +19,58 @@ keys and rules always give the same scores.
 
 ## Running
 
-(added in the driver change)
+The live benchmark is a Go test, `TestBenchLive` in `internal/bench`,
+gated by `SIFT_BENCH=1` like `make e2e`. It makes real model calls, so it
+costs money (Claude) or Kiro credits, and it spends nothing until you give
+it a budget:
+
+```sh
+make bench                    # print the estimate only; spends $0
+make bench BENCH_BUDGET=26    # run within a $26 budget (see Budget)
+```
+
+Without a budget it probes the harness (free), materializes every fixture,
+prints the estimate, and skips with "estimate only; nothing spent", naming
+the minimum budget and the recommended one for a run that must complete
+(see Budget). With
+one, it audits each fixture once per trial through the real `audit.Run`,
+prints a summary table, writes the results file, and compares it with the
+committed baseline when there is one. A plain `go test ./...` never
+reaches a harness.
+
+Ctrl-C, SIGTERM, or the test deadline (`make bench` sets `-timeout 6h`)
+cancels the audit in flight, which kills its harness processes. The runs
+not finished are recorded as interrupted (incomplete), the results are
+still written, and the test then fails. A second Ctrl-C quits at once,
+without writing results. The live test stops 10 minutes before the
+deadline (a tenth of the time left, if that is less), so the results are
+written before `go test` panics.
+
+| Variable | Make variable | Default | Meaning |
+|---|---|---|---|
+| `SIFT_BENCH` | (set by `make bench`) | unset | `1` enables the live test. |
+| `SIFT_BENCH_BUDGET_USD` | `BENCH_BUDGET` | unset (estimate only) | Spend limit in USD for the whole benchmark: a finite number, at least 0. |
+| `SIFT_BENCH_TRIALS` | `BENCH_TRIALS` | `1` | Audits per fixture, 1 to 10. The estimate multiplies by it. |
+| `SIFT_BENCH_FIXTURES` | `BENCH_FIXTURES` | all | Comma-separated fixture names to run. |
+| `SIFT_BENCH_UPDATE_BASELINE` | `BENCH_UPDATE_BASELINE` | unset | `1` rewrites `bench/baseline.json` (see Baseline). |
+| `SIFT_BENCH_HARNESS` | | `claude-code` | `claude-code` or `kiro`. |
+| `SIFT_BENCH_MODEL` | | `sonnet` (`claude-sonnet-5.5` for Kiro) | Model passed to the harness, as in `make e2e`. |
+| `SIFT_BENCH_OUT` | | `bench/results/<UTC stamp>.json` | Results file; a relative path is relative to the repository root. It may not be `bench/baseline.json` (checked before any spend). `bench/results/` is gitignored. |
+| `SIFT_BENCH_RUNS_DIR` | | `$TMPDIR/sift-runs-<stamp>` | Where the audit runs are kept. Agents see their working directory (`<runs_dir>/<id>/source`), so the default does not mention the benchmark; fixture repositories are likewise created as `$TMPDIR/sift-fixture-*`. |
+| `SIFT_BENCH_RESCORE` | `RESULTS` | | Results file for `TestBenchRescore` (see Rescoring); a relative path is relative to the repository root. |
+
+`make bench` passes each make variable only when it is set, so a
+`SIFT_BENCH_*` value already in the environment is not overridden by an
+empty one. The flip side: a `SIFT_BENCH_*` variable exported in your shell
+applies to every `make bench`, so check for a lingering
+`SIFT_BENCH_UPDATE_BASELINE=1` or `SIFT_BENCH_FIXTURES`.
+
+The audit configuration is `config.Default()` with the harness, model and
+runs directory above: every registered reviewer runs, with the default
+`max_findings_per_reviewer`, `max_parallel_agents` and
+`agents.max_budget_usd`. The driver's logic lives in `internal/bench`
+(`Run`, `Compare`, `ReadResults`), not in the test, so a CLI can use it
+later.
 
 ## Fixture layout
 
@@ -224,8 +275,157 @@ reported too.
 
 ## Budget
 
-(added in the driver change)
+`SIFT_BENCH_BUDGET_USD` has no default; unset or 0 means estimate only.
+Three checks stand between the budget and the spend:
+
+1. **The estimate.** The harness is probed (free: Claude Code's probe only
+   runs `--version` and `--help`), every fixture is materialized, and one
+   audit of each is estimated with `cost.ForAudit` exactly as `audit.Run`
+   will (ADR 0007). The total over every (fixture, trial) is printed, with
+   the budget labelled `SIFT_BENCH_BUDGET_USD`. No budget: skip. A high
+   estimate above the budget: fail. Neither runs an agent.
+2. **Per audit.** Before each audit, the spend so far (as charged below)
+   plus that audit's high estimate must fit the budget; otherwise the
+   remaining runs are skipped. Each audit runs with `cost.budget_usd` set
+   to the budget left, and a preflight that always refuses, so an audit
+   whose own estimate exceeds what is left never starts. Its manifest
+   records what it was allowed.
+3. **Per execution.** Every agent execution of every audit goes through
+   one guard. On a harness that enforces a per-execution cap (Claude Code,
+   via `--max-budget-usd`, set from `agents.max_budget_usd`), an execution
+   starts only if the amount charged so far, plus the caps of the
+   executions in flight, plus its own cap fit the budget. Its cap is
+   reserved while it runs. When it ends it is charged its reported cost,
+   or its whole cap if it reported none (a timeout, a crash, a missing
+   result). Retries are separate executions and are guarded the same way.
+
+So on Claude Code the budget is a hard cap, as far as Claude Code holds
+each execution to its `--max-budget-usd`: nothing starts unless its worst
+case fits. An execution that does not fit is refused. Its audit then ends
+partial, so that run is incomplete, and the results say how many
+executions were refused. The results record the reported spend
+(`actual_usd`) and the guard's count (`charged_usd`) separately, with a
+warning when any execution was charged at its cap.
+
+**Headroom.** Near the end of the budget, executions are refused while
+the worst case of those in flight is reserved. The reserve is up to
+`max_parallel_agents` × `agents.max_budget_usd` ($6 by default). The
+estimate also leaves out retries, and its rates are configured, not
+measured. For a baseline run, where an incomplete run would be refused,
+use a budget of at least the larger of the high estimate plus the reserve
+and 1.5 times the high estimate, rounded up to a whole dollar. The factor
+of 1.5 is a margin for retries and estimate error, a judgement rather
+than a measurement; revisit it once results record actual spend against
+the estimate. The estimate-only run prints this figure. For the current
+fixtures it is $26: a $17.14 high estimate, and 1.5 × $17.14 = $25.71
+beats $17.14 + $6. On a capped harness, a budget below the high estimate
+plus the reserve gets a warning before any spend that the run is likely
+to end incomplete.
+
+**Kiro** enforces no per-execution cap and reports no cost (ADR 0005).
+There a cap is no ceiling, so the guard charges only reported cost and
+the estimate is the only guard on spend. The results carry a warning
+saying so.
+
+Runs go trial by trial (every fixture's trial 1, then trial 2), so a stop
+leaves the earlier trials complete.
 
 ## Results, baseline, and comparison
 
-(added in the driver change)
+### Results file
+
+A results file is JSON, written atomically. It keeps every run's raw
+observations, so its scores can always be recomputed:
+
+| Field | Meaning |
+|---|---|
+| `bench_version` | Results format version, `1`. |
+| `created_at` | When the benchmark started (UTC). |
+| `sift` | `commit` and `dirty` of the Sift tree the benchmark ran from. Anything uncommitted is dirty, untracked files included, except under `bench/results/`. A rename counts both its paths. Gitignored paths (`bench/results/`, `.claude/`) never show up. |
+| `harness` | `name`, `version` (from the probe) and `model`. |
+| `agents` | For each agent definition used: `version` and `sha256`. |
+| `config` | `reviewers` and `max_findings_per_reviewer`. |
+| `matching` | `rules` (`match/v1`), `line_tolerance`, `max_location_span`. |
+| `trials` | Audits per fixture. |
+| `cost` | `estimate` (the total), `budget_usd`, `actual_usd` (reported), `charged_usd` (counted by the guard), `executions` (started), `reported_executions`, `capped_executions` (charged at their cap), `refused_executions`. Refused executions never started, so they are not in `executions`. |
+| `fixtures[]` | `name`, `source_digest`, `key_digest`, and `runs[]`: `trial`, `run_id`, `runs_dir`, `status` (the run's status; `failed` when no run was created; `skipped` or `interrupted` when it never started), `complete`, `approval` (the audit's cost approval), `actual_usd` (from the run's manifest), `charged_usd` and `executions` (from the guard: executions started, as in `cost.executions`; the run's manifest also counts refused attempts), `error`, `observations`. |
+| `warnings` | Spend-guard stops, refused or cap-charged executions, interruptions, a harness that enforces no cap or reports no cost. |
+| `scores` | `Score` over the observations (see Metrics). |
+| `comparison` | The comparison with the baseline, when one was made. |
+
+`ReadResults` is strict about what was recorded: an unknown field in the
+setup, runs or observations is an error. `scores` and `comparison` are
+derived, so they are read leniently: unknown fields are ignored, and a
+part that no longer fits the current layout is dropped, to be recomputed
+by rescoring. An older results file therefore stays rescorable after the
+score layout changes.
+
+### Comparison
+
+A comparison rescores **both** results from their stored observations with
+the current keys and matching rules, over the fixtures whose
+`source_digest` is the same in the baseline, in the new result, and in the
+current fixture. Other fixtures are left out with a note. A different
+harness or model adds a "not like-for-like" note.
+
+Guarded rates: each reviewer's candidate and final precision and recall,
+and Pruv precision, recall, and decoy rejection rate. For each, with n the
+larger of the two sides' denominators:
+
+- tolerance = max(0.10, 1/n);
+- a fall of more than the tolerance is `regressed`, a rise of more than it
+  `improved`, anything else `unchanged`;
+- a rate that is null on either side is `n/a`; a reviewer that did not
+  run in the baseline is `new`.
+
+The overall verdict:
+
+- `incomplete` when any compared run, on either side, is incomplete. The
+  note says how many ("current: 1 of 3 runs incomplete; baseline: 0 of
+  3"). An incomplete run scores what it never reported as misses, and a
+  run whose validation failed can leave every rate unchanged or `n/a`, so
+  its rates are not evidence either way.
+- otherwise `regressed` if any rate regressed, `improved` if at least one
+  improved and none regressed, and `no_regression` otherwise.
+
+The verdict is printed and stored in the results; it never fails the test.
+One trial is a noisy sample: a single-trial `regressed` means rerun once
+before concluding anything, and so does `incomplete`.
+
+### Baseline
+
+`bench/baseline.json` is the committed reference result. Every live run
+compares against it when it exists; a comparison that cannot be made (for
+example, no fixture in common) is logged as a note. Recording it is a
+separate, human-approved step: run
+
+```sh
+make bench BENCH_BUDGET=<n> BENCH_UPDATE_BASELINE=1
+```
+
+with the headroom described under Budget, and commit the file after
+reviewing it. The update is refused before any spend when a fixture
+filter is set or the Sift tree is dirty, and after the run, before
+anything is written to `bench/baseline.json`, when any run is incomplete.
+`SIFT_BENCH_OUT` can never point at the baseline.
+
+### Rescoring
+
+A change to a key or to the matching rules changes scores without any new
+audit. `make bench-rescore RESULTS=<file>` (default: the baseline; it
+stops with a message when the file does not exist) runs
+`TestBenchRescore`. That test reads the file and rescores it with the
+current keys and rules. It compares it with the baseline when there is
+one and the file is not the baseline itself (checked by file identity).
+It then prints the summary and rewrites the file's scores. It is offline
+and free. Fixtures whose source changed, or that no longer exist, are left
+out of the rescored scores with a note.
+
+### Wording in tickets
+
+A ticket that changes prompts, Pruv, the gate, or harness settings states
+its effect as "improves the benchmark" or "does not regress the
+benchmark", quoting the comparison verdict of a run against the committed
+baseline (for example: "`make bench BENCH_BUDGET=26`: no_regression
+against baseline 2026-11-20 (abc1234)"). A `regressed` or `incomplete`
+verdict is rerun once before it is reported.

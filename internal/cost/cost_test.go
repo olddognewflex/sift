@@ -2,6 +2,7 @@ package cost
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -268,6 +269,29 @@ func TestUSDRange(t *testing.T) {
 	} {
 		if got := USDRange(tc.low, tc.high); got != tc.want {
 			t.Errorf("USDRange(%v, %v) = %q, want %q", tc.low, tc.high, got, tc.want)
+		}
+	}
+}
+
+func TestLinesForUsesBudgetKey(t *testing.T) {
+	est := ForAudit(testConfig(), 42, true)
+	for _, tc := range []struct {
+		budget float64
+		want   string
+	}{
+		{0, "  no run budget (SIFT_BENCH_BUDGET_USD is 0)"},
+		{10, "  budget $10.00 (SIFT_BENCH_BUDGET_USD): within budget"},
+		{5, "  budget $5.00 (SIFT_BENCH_BUDGET_USD): estimate up to $6.98 exceeds the budget"},
+	} {
+		lines := LinesFor(est, tc.budget, "SIFT_BENCH_BUDGET_USD")
+		if !slices.Contains(lines, tc.want) {
+			t.Errorf("budget %v: lines %q lack %q", tc.budget, lines, tc.want)
+		}
+		if got := strings.Join(lines, "\n"); strings.Contains(got, "cost.budget_usd") {
+			t.Errorf("budget %v: lines mention cost.budget_usd:\n%s", tc.budget, got)
+		}
+		if !slices.Equal(Lines(est, tc.budget), LinesFor(est, tc.budget, "cost.budget_usd")) {
+			t.Errorf("budget %v: Lines differs from LinesFor with cost.budget_usd", tc.budget)
 		}
 	}
 }

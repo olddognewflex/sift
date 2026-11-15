@@ -46,7 +46,7 @@ each decision is saved as soon as it is made. The report always runs.
 | `internal/contract` | Versioned artifact types, strict decoding, validation. The single source of truth |
 | `internal/schema` | JSON Schema generation from contract types (for harness and `schemas/`), and validation for harnesses without native schema support |
 | `internal/source` | Git inspection, snapshot export and file count, dirty-tree policy, repository fingerprint |
-| `internal/cost` | Pure pre-run cost model shared by audit, verify, and benchmark: estimate, budget check, display lines (ADR 0007) |
+| `internal/cost` | Pure pre-run cost model shared by audit, verify, and benchmark: estimate, budget check, display lines labelled with the caller's budget setting (ADR 0007) |
 | `internal/storage` | Run directories, atomic artifact writes, run lookup |
 | `internal/agent` | Agent definition loading (embedded `agents/*.md` or override dir) |
 | `internal/harness` | Harness interface, request/result, typed errors |
@@ -58,7 +58,7 @@ each decision is saved as soon as it is made. The report always runs.
 | `internal/findings` | Finding IDs, mechanical evidence checks, state transitions, evidence gate |
 | `internal/audit` | Orchestrator: scheduler, task implementations, retries, run state |
 | `internal/report` | Deterministic Markdown reports from persisted artifacts |
-| `internal/bench` | Benchmark scoring, offline and pure: answer keys, fixture loading and digests, observations from a run, matching rules, precision and recall (ADR 0008, `docs/benchmark.md`) |
+| `internal/bench` | Benchmark (ADR 0008, `docs/benchmark.md`): offline, pure scoring (answer keys, fixture loading and digests, observations from a run, matching rules, precision and recall); the live driver (estimate, per-audit budget check, a per-execution budget guard shared by every audit, one `audit.Run` per fixture and trial, interruptible); results files, rescoring, and comparison with the committed baseline. The live run is the `SIFT_BENCH=1` test `TestBenchLive` (`make bench`) |
 
 There is only one interface that real code substitutes:
 `harness.Harness` (Claude Code or Kiro in production, the fake in tests).
