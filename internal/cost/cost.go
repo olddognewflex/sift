@@ -116,6 +116,12 @@ func OverBudget(est contract.CostEstimate, budget float64) bool {
 // Lines renders est and its budget check for people, one line each,
 // without a program prefix.
 func Lines(est contract.CostEstimate, budget float64) []string {
+	return LinesFor(est, budget, "cost.budget_usd")
+}
+
+// LinesFor is Lines with the budget labelled by budgetKey, the setting a
+// person changes to raise it (the benchmark's is SIFT_BENCH_BUDGET_USD).
+func LinesFor(est contract.CostEstimate, budget float64, budgetKey string) []string {
 	var head string
 	switch est.Kind {
 	case KindVerify:
@@ -165,11 +171,11 @@ func Lines(est contract.CostEstimate, budget float64) []string {
 	row("pruv", fmt.Sprintf("%s calls × %s", calls, rate(est.Rates.PruvCallUSD)), amount)
 	switch {
 	case budget <= 0:
-		lines = append(lines, "  no run budget (cost.budget_usd is 0)")
+		lines = append(lines, fmt.Sprintf("  no run budget (%s is 0)", budgetKey))
 	case OverBudget(est, budget):
-		lines = append(lines, fmt.Sprintf("  budget %s (cost.budget_usd): estimate up to %s exceeds the budget", usd(budget), usd(est.HighUSD)))
+		lines = append(lines, fmt.Sprintf("  budget %s (%s): estimate up to %s exceeds the budget", usd(budget), budgetKey, usd(est.HighUSD)))
 	default:
-		lines = append(lines, fmt.Sprintf("  budget %s (cost.budget_usd): within budget", usd(budget)))
+		lines = append(lines, fmt.Sprintf("  budget %s (%s): within budget", usd(budget), budgetKey))
 	}
 	if !est.HarnessEnforcesBudget {
 		lines = append(lines, "  the harness cannot enforce agents.max_budget_usd (ADR 0005); this estimate is the only spend guard")
