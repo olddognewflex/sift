@@ -22,7 +22,8 @@ func makeFixture(t *testing.T, root, dir, name string, files map[string]string) 
 }
 
 func TestLoadFixturesSelftest(t *testing.T) {
-	fs, err := LoadFixtures("testdata", nil)
+	// testdata also holds the benchmark fixtures dir, so select by name.
+	fs, err := LoadFixtures("testdata", []string{"selftest"})
 	if err != nil {
 		t.Fatal(err)
 	}

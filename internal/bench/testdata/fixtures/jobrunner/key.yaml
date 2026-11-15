@@ -1,0 +1,110 @@
+version: 1
+fixture: jobrunner
+entries:
+  - id: C-D1
+    kind: defect
+    category: correctness
+    title: drain does not wait for the jobs it starts
+    locations:
+      - {path: src/worker.ts, start_line: 36, end_line: 44}
+      - {path: src/index.ts, start_line: 27, end_line: 36}
+    anchor: "lanes.forEach(async () => {"
+    notes: >-
+      drain starts its lanes with lanes.forEach(async ...). forEach
+      ignores the promises the callbacks return and nothing else awaits
+      them (the only await, on this.active, happens before the lanes
+      start), so drain resolves as soon as the lanes have started their
+      first jobs, contradicting its doc comment ("Resolves once they have
+      all finished"). shutdown in index.ts then calls process.exit(0),
+      killing the drained jobs mid-run, leaving their records stuck at
+      "running" and never starting the rest of the ready jobs. Any error
+      thrown from those runs is also an unhandled rejection. Concurrency
+      itself is respected: the lanes start only after running jobs finish
+      and number at most options.concurrency.
+  - id: C-D2
+    kind: defect
+    category: correctness
+    title: attempts is counted only on success, so failing jobs retry forever
+    locations: [{path: src/worker.ts, start_line: 65, end_line: 75}]
+    anchor: "job.attempts += 1;"
+    notes: >-
+      run increments job.attempts only after the handler resolves. On
+      failure attempts stays at 0, so `job.attempts >= job.maxAttempts`
+      (maxAttempts is at least 1) is never true and the job is requeued
+      forever, and nextDelay(0) always returns the base delay, so backoff
+      never grows. The stored attempts count also stays 0. A permanently
+      failing job loops every ~500 ms indefinitely.
+  - id: C-D3
+    kind: defect
+    category: architecture
+    title: API memoises job status in its own cache instead of reading the store
+    locations:
+      - {path: src/api.ts, start_line: 12, end_line: 12}
+      - {path: src/api.ts, start_line: 20, end_line: 22}
+    anchor: "const statusCache = new Map<string, JobStatus>();"
+    notes: >-
+      Job status has two sources of truth. JobStore records it and the
+      worker updates it there (running, succeeded, failed, queued), but
+      jobsRouter keeps a separate statusCache: GET /jobs/:id stores the
+      status it sees on the first read and afterwards reports the cached
+      value, never refreshing it from the store, while attempts and error
+      in the same response come from the store. A job polled while queued
+      or running reports that status forever, even after GET
+      /jobs/:id/result (which reads the store) returns its result. The
+      cache should go; the store is the record.
+  - id: C-D4
+    kind: defect
+    category: architecture
+    title: Core queue depends on the Express request type
+    locations:
+      - {path: src/queue.ts, start_line: 2, end_line: 2}
+      - {path: src/queue.ts, start_line: 31, end_line: 32}
+      - {path: src/api.ts, start_line: 39, end_line: 39}
+    anchor: 'import type { Request } from "express";'
+    notes: >-
+      JobQueue is the core scheduling component, but enqueue takes an
+      Express Request and destructures req.body itself, and the API hands
+      it the raw request (queue.enqueue(req)). The queue depends on the
+      HTTP framework and cannot accept a job from any other source (a
+      timer, a script, a test) without faking a request. The API layer
+      should parse the body and pass a typed submission.
+  - id: C-X1
+    kind: decoy
+    category: correctness
+    title: Result check uses loose equality (== null)
+    locations: [{path: src/api.ts, start_line: 60, end_line: 63}]
+    anchor: "if (job.result == null) {"
+    notes: >-
+      `== null` is true exactly for null and undefined, and both mean
+      "no result" here: JobRecord.result is optional, and a handler can
+      resolve with undefined (pause returns nothing) or null. Falsy
+      results such as 0, "" or false are not == null, so they are still
+      returned as JSON. A strict === null would wrongly send undefined
+      down the JSON path.
+  - id: C-X2
+    kind: decoy
+    category: correctness
+    title: Job ids are sorted without a comparator
+    locations: [{path: src/store.ts, start_line: 32, end_line: 32}]
+    anchor: "ids.sort();"
+    notes: >-
+      The ids are strings from randomUUID(), and the order wanted is
+      lexicographic: page selects ids with the string comparison
+      id > after for cursor paging. The default sort compares strings by
+      UTF-16 code units, the same order as the < and > operators, so the
+      cursor and the sort agree. The comparator pitfall applies to
+      numbers, not to these ids.
+  - id: C-X3
+    kind: decoy
+    category: architecture
+    title: JobStore clones every record it stores and returns
+    locations: [{path: src/store.ts, start_line: 11, end_line: 14}]
+    anchor: "return record && { ...record };"
+    notes: >-
+      The copying is what keeps the store the single owner of its
+      records, and a caller depends on it: page returns records through
+      get, and the GET /jobs handler in api.ts deletes `result` from each
+      record it lists (`delete job.result`). Without the copy in get,
+      listing jobs would strip the stored results, and GET
+      /jobs/:id/result would then answer 204 for jobs that returned a
+      value. The copies are shallow and cheap at this scale.
