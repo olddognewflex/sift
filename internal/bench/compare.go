@@ -110,8 +110,9 @@ func Compare(baseline, current *Results, fixtures []Fixture) (*Comparison, error
 	if cn > 0 || bn > 0 {
 		c.Notes = append(c.Notes, fmt.Sprintf("current: %d of %d runs incomplete; baseline: %d of %d", cn, ct, bn, bt))
 	}
-	if bh, ch := baseline.Harness, current.Harness; bh.Name != ch.Name || bh.Model != ch.Model {
-		c.Notes = append(c.Notes, fmt.Sprintf("not like-for-like: baseline ran %s (model %s), this run %s (model %s)", bh.Name, orDash(bh.Model), ch.Name, orDash(ch.Model)))
+	if bh, ch := baseline.Harness, current.Harness; bh.Name != ch.Name || bh.Version != ch.Version || bh.Model != ch.Model {
+		c.Notes = append(c.Notes, fmt.Sprintf("not like-for-like: baseline ran %s %s (model %s), this run %s %s (model %s)",
+			bh.Name, orDash(bh.Version), orDash(bh.Model), ch.Name, orDash(ch.Version), orDash(ch.Model)))
 	}
 	bs, err := Score(bin)
 	if err != nil {

@@ -153,6 +153,29 @@ func TestCompare(t *testing.T) {
 		}
 	})
 
+	t.Run("harness version drift is not like-for-like", func(t *testing.T) {
+		base := results("claude-code", map[string][]Observation{"f1": baseObs, "f2": baseObs}, digests)
+		cur := results("claude-code", map[string][]Observation{"f1": baseObs, "f2": baseObs}, digests)
+		base.Harness.Version = "2.1.0"
+		cur.Harness.Version = "2.2.0"
+		c, err := Compare(base, cur, fixtures)
+		if err != nil {
+			t.Fatal(err)
+		}
+		notes := strings.Join(c.Notes, "\n")
+		if !strings.Contains(notes, "not like-for-like") || !strings.Contains(notes, "2.1.0") || !strings.Contains(notes, "2.2.0") {
+			t.Errorf("notes %q", c.Notes)
+		}
+		cur.Harness.Version = "2.1.0"
+		c, err = Compare(base, cur, fixtures)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.Join(c.Notes, "\n"), "not like-for-like") {
+			t.Errorf("same harness, version and model: notes %q", c.Notes)
+		}
+	})
+
 	t.Run("no comparable fixture", func(t *testing.T) {
 		base := results("claude-code", map[string][]Observation{"f1": baseObs}, map[string]string{"f1": "old"})
 		cur := results("claude-code", map[string][]Observation{"f1": baseObs}, digests)

@@ -366,7 +366,9 @@ A comparison rescores **both** results from their stored observations with
 the current keys and matching rules, over the fixtures whose
 `source_digest` is the same in the baseline, in the new result, and in the
 current fixture. Other fixtures are left out with a note. A different
-harness or model adds a "not like-for-like" note.
+harness, harness version, or model adds a "not like-for-like" note, so a
+change caused by a new Claude Code or Kiro release is not read as a change
+in Sift.
 
 Guarded rates: each reviewer's candidate and final precision and recall,
 and Pruv precision, recall, and decoy rejection rate. For each, with n the
