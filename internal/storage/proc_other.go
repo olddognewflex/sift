@@ -1,6 +1,6 @@
 //go:build !unix
 
-package cli
+package storage
 
 // processAlive cannot be determined portably; assume the run is live.
 func processAlive(int) bool { return true }

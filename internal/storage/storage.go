@@ -123,6 +123,40 @@ func (s Store) Latest() (*Run, error) {
 	return s.Open(ids[len(ids)-1])
 }
 
+// LatestAudit returns the most recent audit run, skipping verify runs
+// (ADR 0006) and runs whose manifest cannot be read.
+func (s Store) LatestAudit() (*Run, error) {
+	ids, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range slices.Backward(ids) {
+		run := &Run{ID: id, Dir: filepath.Join(s.Root, id)}
+		if m, err := run.Manifest(); err == nil && m.Verifies == nil {
+			return run, nil
+		}
+	}
+	return nil, fmt.Errorf("%w in %s", ErrNoRuns, s.Root)
+}
+
+// VerifiersOf returns, in chronological order, the IDs of the verify runs
+// that re-check run id. The link is stored only in each verify run's
+// manifest, so this scans them; unreadable manifests are skipped.
+func (s Store) VerifiersOf(id string) ([]string, error) {
+	ids, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, vid := range ids {
+		run := &Run{ID: vid, Dir: filepath.Join(s.Root, vid)}
+		if m, err := run.Manifest(); err == nil && m.Verifies != nil && m.Verifies.Run == id {
+			out = append(out, vid)
+		}
+	}
+	return out, nil
+}
+
 // Resolve opens id, or the latest run when id is empty.
 func (s Store) Resolve(id string) (*Run, error) {
 	if id == "" {
