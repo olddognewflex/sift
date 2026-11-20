@@ -335,7 +335,7 @@ func statusCmd(d Deps, load loader) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			status, note := effectiveStatus(m)
+			status, note := storage.EffectiveStatus(m)
 			execs := loadExecutions(run, m)
 			if asJSON {
 				return writeJSON(d.Stdout, map[string]any{"effective_status": status, "note": note, "manifest": m, "executions": execs})
@@ -445,22 +445,6 @@ func reportCmd(d Deps, load loader) *cobra.Command {
 }
 
 // ---------------------------------------------------------------------------
-
-// effectiveStatus detects runs left "running" by a process that no longer
-// exists (killed, crashed, machine restarted).
-func effectiveStatus(m *contract.Manifest) (contract.RunStatus, string) {
-	if m.Status != contract.RunRunning {
-		return m.Status, ""
-	}
-	host, _ := os.Hostname()
-	if m.Host == host && !processAlive(m.PID) {
-		return contract.RunInterrupted, fmt.Sprintf("the audit process (pid %d) exited without finishing; artifacts written so far are preserved", m.PID)
-	}
-	if m.Host != host {
-		return m.Status, fmt.Sprintf("run is executing on host %s", m.Host)
-	}
-	return m.Status, fmt.Sprintf("in progress (pid %d)", m.PID)
-}
 
 func loadExecutions(run *storage.Run, m *contract.Manifest) []contract.ExecutionResult {
 	var out []contract.ExecutionResult

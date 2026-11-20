@@ -27,12 +27,19 @@ const (
 	ArchitectureAudit = "architecture-audit.md"
 	FindingsInventory = "findings.md"
 	RemediationPlan   = "remediation-plan.md"
+
+	// VerificationReport is the only report a verify run writes (ADR 0006).
+	VerificationReport = "verification.md"
 )
 
 // Item is a finding with its validation record and effective ratings.
 type Item struct {
 	contract.Finding
 	Record *contract.DecisionRecord `json:"validation,omitempty"`
+	// Verification is the finding's verify outcome. It is set only in
+	// verify runs (ADR 0006), where the finding's state is its state at
+	// the audit.
+	Verification *contract.VerificationRecord `json:"verification,omitempty"`
 	// Effective ratings include any adjustment made by the validator.
 	Severity   contract.Severity   `json:"effective_severity"`
 	Confidence contract.Confidence `json:"effective_confidence"`
@@ -63,6 +70,14 @@ func Load(run *storage.Run) (*Data, error) {
 			return false, nil
 		}
 		return true, run.ReadJSON(rel, v)
+	}
+	// A verify run has none of the audit artifacts; branch before looking
+	// for them so they are not reported as missing.
+	if m.Verifies != nil {
+		if err := d.loadVerify(run, optional); err != nil {
+			return nil, err
+		}
+		return d, nil
 	}
 	var disc contract.Discovery
 	if ok, err := optional(storage.DiscoveryFile, &disc); err != nil {
@@ -120,6 +135,61 @@ func Load(run *storage.Run) (*Data, error) {
 	return d, nil
 }
 
+// loadVerify reads a verify run. Its findings.json holds the selected
+// findings, copied verbatim from the audited run with their states at the
+// audit. Its verification.json holds the outcomes decided so far; a selected
+// finding without a record was not checked.
+func (d *Data) loadVerify(run *storage.Run, optional func(string, contract.Validator) (bool, error)) error {
+	// The selected findings are copied when the run is created, so a verify
+	// run without them is broken, not merely unfinished.
+	if !run.Exists(storage.FindingsFile) {
+		return fmt.Errorf("run %s verifies %d finding(s) but has no %s", run.ID, len(d.Manifest.Verifies.Findings), storage.FindingsFile)
+	}
+	var final contract.FindingSet
+	if err := run.ReadJSON(storage.FindingsFile, &final); err != nil {
+		return err
+	}
+	var set contract.VerificationSet
+	if _, err := optional(storage.VerificationFile, &set); err != nil {
+		return err
+	}
+	found := map[string]contract.Finding{}
+	for _, f := range final.Findings {
+		found[f.ID] = f
+	}
+	records := map[string]*contract.VerificationRecord{}
+	for i := range set.Records {
+		records[set.Records[i].FindingID] = &set.Records[i]
+	}
+	for _, id := range d.Manifest.Verifies.Findings {
+		f, ok := found[id]
+		if !ok {
+			return fmt.Errorf("run %s verifies %s, but its %s has no such finding", run.ID, id, storage.FindingsFile)
+		}
+		r := records[id]
+		if r == nil {
+			// Validator adjustments live in the audited run's decisions,
+			// which are not copied, so the finding's own ratings stand in.
+			r = &contract.VerificationRecord{
+				FindingID:     id,
+				OriginalState: f.State,
+				Severity:      f.Severity,
+				Confidence:    f.Confidence,
+				Relocations:   []contract.Relocation{},
+				Outcome:       contract.OutcomeUnverified,
+				OutcomeReason: "not checked",
+				Error:         "no record in " + storage.VerificationFile,
+			}
+		}
+		d.Items = append(d.Items, Item{
+			Finding: f, Verification: r,
+			Severity:   cmp.Or(r.Severity, f.Severity),
+			Confidence: cmp.Or(r.Confidence, f.Confidence),
+		})
+	}
+	return nil
+}
+
 // finalFindings returns the run's final finding states. Validation writes
 // them to findings.json, which is the canonical source. A run whose
 // validation did not finish (interrupted, or still running) has no
@@ -142,11 +212,16 @@ func Generate(run *storage.Run, now func() time.Time) (contract.ReportMeta, erro
 	if err != nil {
 		return contract.ReportMeta{}, err
 	}
-	files := map[string]string{
-		ExecutiveSummary:  d.executiveSummary(),
-		ArchitectureAudit: d.architectureAudit(),
-		FindingsInventory: d.findingsInventory(),
-		RemediationPlan:   d.remediationPlan(),
+	var files map[string]string
+	if d.Manifest.Verifies != nil {
+		files = map[string]string{VerificationReport: d.verificationReport()}
+	} else {
+		files = map[string]string{
+			ExecutiveSummary:  d.executiveSummary(),
+			ArchitectureAudit: d.architectureAudit(),
+			FindingsInventory: d.findingsInventory(),
+			RemediationPlan:   d.remediationPlan(),
+		}
 	}
 	meta := contract.ReportMeta{
 		Header:         contract.NewHeader(contract.KindReportMeta, run.ID),
@@ -156,6 +231,10 @@ func Generate(run *storage.Run, now func() time.Time) (contract.ReportMeta, erro
 		SourceRevision: d.Manifest.Repository.SourceRevision,
 		StateCounts:    d.counts(),
 		Limitations:    d.limitations(),
+	}
+	if v := d.Manifest.Verifies; v != nil {
+		meta.VerifiesRun = v.Run
+		meta.OutcomeCounts = d.outcomeCounts()
 	}
 	var errs []error
 	for _, name := range slices.Sorted(maps.Keys(files)) {
@@ -220,12 +299,12 @@ func (d *Data) strengths() []contract.Strength {
 	return out
 }
 
-// limitations lists everything that bounds confidence in this audit.
+// limitations lists everything that bounds confidence in this run.
 func (d *Data) limitations() []string {
 	m := d.Manifest
 	var out []string
 	if m.Status != contract.RunCompleted {
-		out = append(out, fmt.Sprintf("The audit run is %s; results are incomplete.", m.Status))
+		out = append(out, fmt.Sprintf("The %s run is %s; results are incomplete.", d.kind(), m.Status))
 	}
 	for _, t := range m.Tasks {
 		if t.ID != "report" && t.Status != contract.TaskSucceeded {
@@ -236,19 +315,27 @@ func (d *Data) limitations() []string {
 			out = append(out, s+".")
 		}
 	}
-	if d.Discovery != nil && d.Discovery.Report.Completeness == contract.CompletenessPartial {
-		out = append(out, "Discovery reported partial completeness; see the unknowns in the architecture audit.")
+	if m.Verifies != nil {
+		out = append(out, d.verifyLimitations()...)
+	} else {
+		if d.Discovery != nil && d.Discovery.Report.Completeness == contract.CompletenessPartial {
+			out = append(out, "Discovery reported partial completeness; see the unknowns in the architecture audit.")
+		}
+		if n := d.counts()[contract.StateUnvalidated]; n > 0 {
+			out = append(out, fmt.Sprintf("%d finding(s) were not validated and must not be treated as accepted.", n))
+		}
+		out = append(out, "Agents read source code but could not run it. No finding is backed by test or execution results from this run.")
 	}
-	if n := d.counts()[contract.StateUnvalidated]; n > 0 {
-		out = append(out, fmt.Sprintf("%d finding(s) were not validated and must not be treated as accepted.", n))
-	}
-	out = append(out, "Agents read source code but could not run it. No finding is backed by test or execution results from this run.")
 	if m.Repository.Dirty {
 		switch m.Repository.DirtyPolicy {
 		case contract.DirtyHead:
-			out = append(out, "The working tree had uncommitted changes that were excluded from this audit.")
+			out = append(out, fmt.Sprintf("The working tree had uncommitted changes that were excluded from this %s.", d.kind()))
 		case contract.DirtyInclude:
-			out = append(out, "Uncommitted changes were audited. Evidence refers to the run's source snapshot, not to the commit alone.")
+			what := "Uncommitted changes were audited."
+			if m.Verifies != nil {
+				what = "Uncommitted changes were included in the verified snapshot."
+			}
+			out = append(out, what+" Evidence refers to the run's source snapshot, not to the commit alone.")
 		}
 	}
 	if len(m.Repository.SkippedPaths) > 0 {
@@ -261,6 +348,14 @@ func (d *Data) limitations() []string {
 		out = append(out, "Isolation: "+u+".")
 	}
 	return out
+}
+
+// kind names the run in user-facing text.
+func (d *Data) kind() string {
+	if d.Manifest.Verifies != nil {
+		return "verify"
+	}
+	return "audit"
 }
 
 func (d *Data) header(b *strings.Builder, title string) {

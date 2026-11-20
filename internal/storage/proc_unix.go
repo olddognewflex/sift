@@ -1,6 +1,6 @@
 //go:build unix
 
-package cli
+package storage
 
 import (
 	"errors"
