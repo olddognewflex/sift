@@ -91,6 +91,10 @@ type auditor struct {
 	// Set by a task before its dependents start (ordered by the scheduler).
 	discovery contract.DiscoveryReport
 	plan      contract.ReviewPlan
+
+	// verify is set for verify runs (ADR 0006), which run a different task
+	// graph through the same lifecycle.
+	verify *verifier
 }
 
 // Run performs an audit. Setup failures (invalid repository, refused dirty
@@ -137,28 +141,40 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	runCost, err := preflight(ctx, opts, st, hinfo)
+	// The estimate is made from the snapshot the run will export.
+	files, err := source.CountFiles(ctx, st, cfg.Audit.DirtyPolicy)
 	if err != nil {
 		return nil, err
 	}
+	runCost, err := preflight(ctx, opts, cost.ForAudit(cfg, files, enforcesBudget(hinfo)))
+	if err != nil {
+		return nil, err
+	}
+	a := &auditor{opts: opts, defs: defs, schemas: schemas}
+	return a.launch(ctx, "auditing", st, hinfo, runCost, before)
+}
 
-	id, err := storage.NewRunID(opts.Now())
+// launch creates the run and drives it through its task graph to the
+// report. Everything before it must refuse without creating a run; once
+// the run exists, launch returns it together with any error.
+func (a *auditor) launch(ctx context.Context, verb string, st source.State, hinfo harness.Info, runCost *contract.RunCost, before string) (*Result, error) {
+	id, err := storage.NewRunID(a.opts.Now())
 	if err != nil {
 		return nil, err
 	}
-	run, err := opts.Store.Create(id)
+	run, err := a.opts.Store.Create(id)
 	if err != nil {
 		return nil, err
 	}
-	a := &auditor{opts: opts, run: run, defs: defs, snapshot: run.Path(storage.SourceDir), schemas: schemas}
+	a.run, a.snapshot = run, run.Path(storage.SourceDir)
 	if err := a.initialize(ctx, st, hinfo, runCost); err != nil {
 		a.fail(ctx, err)
 		return &Result{Run: run, Manifest: a.manifest()}, err
 	}
 
 	tasks := a.tasks()
-	a.logf("run %s: auditing %s at %s", run.ID, st.Root, a.revision)
-	if err := Schedule(ctx, tasks, cfg.Audit.MaxParallelAgents, a.observe); err != nil {
+	a.logf("run %s: %s %s at %s", run.ID, verb, st.Root, a.revision)
+	if err := Schedule(ctx, tasks, a.opts.Config.Audit.MaxParallelAgents, a.observe); err != nil {
 		a.fail(ctx, err)
 		return &Result{Run: run, Manifest: a.manifest()}, err
 	}
@@ -166,17 +182,15 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	return &Result{Run: run, Manifest: a.manifest()}, err
 }
 
-// preflight estimates the run's cost from the snapshot it will export,
-// logs it, and checks it against cost.budget_usd. Only an over-budget
-// estimate goes to Options.Preflight, which must approve it explicitly.
-func preflight(ctx context.Context, opts Options, st source.State, hinfo harness.Info) (*contract.RunCost, error) {
-	cfg := opts.Config
-	files, err := source.CountFiles(ctx, st, cfg.Audit.DirtyPolicy)
-	if err != nil {
-		return nil, err
-	}
-	est := cost.ForAudit(cfg, files, slices.Contains(hinfo.Capabilities, harness.CapBudgetLimit))
-	budget := cfg.Cost.BudgetUSD
+func enforcesBudget(hinfo harness.Info) bool {
+	return slices.Contains(hinfo.Capabilities, harness.CapBudgetLimit)
+}
+
+// preflight logs the run's cost estimate and checks it against
+// cost.budget_usd. Only an over-budget estimate goes to Options.Preflight,
+// which must approve it explicitly.
+func preflight(ctx context.Context, opts Options, est contract.CostEstimate) (*contract.RunCost, error) {
+	budget := opts.Config.Cost.BudgetUSD
 	if opts.Log != nil {
 		// No auditor (and so no logf) exists yet, and nothing else logs.
 		for _, line := range cost.Lines(est, budget) {
@@ -192,6 +206,7 @@ func preflight(ctx context.Context, opts Options, st source.State, hinfo harness
 	case opts.Preflight == nil:
 		approval = contract.ApprovalUnchecked
 	default:
+		var err error
 		if approval, err = opts.Preflight(ctx, est); err != nil {
 			return nil, err
 		}
@@ -241,6 +256,13 @@ func (a *auditor) initialize(ctx context.Context, st source.State, hinfo harness
 	if err != nil {
 		return err
 	}
+	if a.verify != nil {
+		// The selected findings are copied before any manifest exists, so
+		// a verify run is never listed without them.
+		if err := a.verify.writeFindings(a.run); err != nil {
+			return err
+		}
+	}
 	a.m = &contract.Manifest{
 		Header:      contract.NewHeader(contract.KindManifest, a.run.ID),
 		SiftVersion: a.opts.SiftVersion,
@@ -264,6 +286,13 @@ func (a *auditor) initialize(ctx context.Context, st source.State, hinfo harness
 			Enforcement: hinfo.Enforcement, Unenforced: hinfo.Unenforced,
 		},
 		Cost: runCost,
+	}
+	if v := a.verify; v != nil {
+		target := v.target
+		a.m.Verifies = &target
+		if a.m.Cost != nil {
+			a.m.Cost.Actual.Candidates = len(v.items)
+		}
 	}
 	for _, t := range a.tasks() {
 		a.m.Tasks = append(a.m.Tasks, contract.TaskState{ID: t.ID, DependsOn: t.deps(), Status: contract.TaskPending})
@@ -307,6 +336,9 @@ func (a *auditor) initialize(ctx context.Context, st source.State, hinfo harness
 }
 
 func (a *auditor) tasks() []Task {
+	if a.verify != nil {
+		return []Task{{ID: taskVerification, Run: a.runVerification}}
+	}
 	cfg := a.opts.Config
 	tasks := []Task{
 		{ID: taskDiscovery, Run: a.runDiscovery},
@@ -478,27 +510,27 @@ func (a *auditor) validate(ctx context.Context, f contract.Finding) (contract.De
 	return rec, err
 }
 
-// decisionLog persists validation decisions as they arrive, so an
-// interrupted run keeps every decision already made. It is safe for
-// concurrent use.
-type decisionLog struct {
-	run      *storage.Run
+// recordLog persists per-finding records as they arrive, so an interrupted
+// run keeps every record already decided. It is safe for concurrent use.
+type recordLog[T any] struct {
 	mu       sync.Mutex
-	records  []*contract.DecisionRecord // by candidate index; nil until decided
+	records  []*T // by finding index; nil until decided
+	write    func([]T) error
 	writeErr error
 }
 
-// newDecisionLog writes an empty decisions file for n candidates.
-func newDecisionLog(run *storage.Run, n int) (*decisionLog, error) {
-	l := &decisionLog{run: run, records: make([]*contract.DecisionRecord, n)}
+// newRecordLog writes an empty record file for n findings. write persists
+// the records decided so far, in finding order.
+func newRecordLog[T any](n int, write func([]T) error) (*recordLog[T], error) {
+	l := &recordLog[T]{records: make([]*T, n), write: write}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l, l.writeLocked()
 }
 
-// record stores the decision for candidate i and rewrites the decisions
-// file. A write failure is kept and reported by err.
-func (l *decisionLog) record(i int, rec contract.DecisionRecord) {
+// record stores the record for finding i and rewrites the file. A write
+// failure is kept and reported by err.
+func (l *recordLog[T]) record(i int, rec T) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.records[i] = &rec
@@ -507,20 +539,37 @@ func (l *decisionLog) record(i int, rec contract.DecisionRecord) {
 	}
 }
 
-func (l *decisionLog) err() error {
+func (l *recordLog[T]) err() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.writeErr
 }
 
-func (l *decisionLog) writeLocked() error {
-	set := &contract.DecisionSet{Header: contract.NewHeader(contract.KindDecisions, l.run.ID), Decisions: []contract.DecisionRecord{}}
+// decided returns the records decided so far, in finding order.
+func (l *recordLog[T]) decided() []T {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.decidedLocked()
+}
+
+func (l *recordLog[T]) decidedLocked() []T {
+	out := []T{}
 	for _, r := range l.records {
 		if r != nil {
-			set.Decisions = append(set.Decisions, *r)
+			out = append(out, *r)
 		}
 	}
-	return l.run.WriteJSON(storage.DecisionsFile, set)
+	return out
+}
+
+func (l *recordLog[T]) writeLocked() error {
+	return l.write(l.decidedLocked())
+}
+
+func newDecisionLog(run *storage.Run, n int) (*recordLog[contract.DecisionRecord], error) {
+	return newRecordLog(n, func(recs []contract.DecisionRecord) error {
+		return run.WriteJSON(storage.DecisionsFile, &contract.DecisionSet{Header: contract.NewHeader(contract.KindDecisions, run.ID), Decisions: recs})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +825,9 @@ func (a *auditor) status(ctx context.Context) contract.RunStatus {
 	m := a.manifest()
 	if ctx.Err() != nil {
 		return contract.RunInterrupted
+	}
+	if a.verify != nil {
+		return a.verify.status(m)
 	}
 	if t := m.Task(taskDiscovery); t == nil || t.Status != contract.TaskSucceeded {
 		return contract.RunFailed

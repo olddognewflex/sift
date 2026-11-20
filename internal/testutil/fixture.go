@@ -93,9 +93,31 @@ var Decisions = map[string]contract.ValidationDecision{
 
 // FindingID extracts the finding a Pruv prompt is about.
 func FindingID(req harness.Request) string {
-	_, rest, _ := strings.Cut(req.Prompt, "validate finding ")
+	// Only the task heading names the finding; the rest of the prompt
+	// may quote anything.
+	rest, ok := strings.CutPrefix(req.Prompt, "# Task: validate finding ")
+	if !ok {
+		rest, _ = strings.CutPrefix(req.Prompt, "# Task: verify finding ")
+	}
 	id, _, _ := strings.Cut(rest, "\n")
 	return id
+}
+
+// VerifyPruv answers verify tasks with decisions by finding ID. A finding
+// without a decision fails, so a test notices unexpected executions.
+func VerifyPruv(decisions map[string]contract.ValidationDecision) fake.Responder {
+	return func(req harness.Request, _ int) (json.RawMessage, error) {
+		d, ok := decisions[FindingID(req)]
+		if !ok {
+			return nil, &harness.Error{Kind: harness.ErrProcess, Msg: "unexpected verify of " + FindingID(req)}
+		}
+		return json.Marshal(d)
+	}
+}
+
+// Decision returns a complete validation decision with verdict v.
+func Decision(v contract.Verdict, c contract.Classification) contract.ValidationDecision {
+	return decision(v, c)
 }
 
 // Pruv answers with Decisions.
